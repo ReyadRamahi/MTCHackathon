@@ -1,0 +1,11 @@
+@template("base.jte")
+@param app.Post post
+
+<h1>${post.title}</h1>
+<div class="meta">Posted ${post.getCreatedAtDisplay()}</div>
+@if(post.body != null && !post.body.isEmpty())
+  <p style="white-space:pre-wrap">${post.body}</p>
+@endif
+
+<p>(Scholar answers coming soon)</p>
+<p><a href="/">Back</a></p>
