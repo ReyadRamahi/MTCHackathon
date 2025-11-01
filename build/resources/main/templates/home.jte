@@ -1,57 +1,58 @@
 @param app.User me
 @param app.HomeView vm
-@import header.jte
 
-@header(me)
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Amaanah • Newest</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Amaanah - Ask Questions, Get Scholar Answers</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body class="site">
-<header class="site-header">
-  <a class="home-link" href="/">Amaanah</a> ·
-  <a class="ask-link" href="/ask">Ask anonymously</a>
-</header>
+<body>
+  @template.header(me = me)
 
-<main class="feed">
-  <h1 class="page-title">Newest questions</h1>
+  <main class="container">
+    <h1 class="page-title">Recent Questions</h1>
 
-  @if(!vm.hasPosts())
-    <p class="empty">No questions yet.</p>
-  @endif
+    @if(!vm.hasPosts())
+      <div class="empty-state">
+        <p>No questions yet. Be the first to ask!</p>
+      </div>
+    @else
+      <ul class="post-list">
+        @for(app.Post p : vm.getPostsNewestFirst())
+          <li class="post-item">
+            <div class="vote-box">
+              <form method="post" action="/q/${p.getId()}/upvote">
+                <button class="vote-btn up" type="submit" title="Upvote">▲</button>
+              </form>
 
-  <ul class="post-list">
-    @for(app.Post p : vm.getPostsNewestFirst())
-      <li class="post-row">
-        <div class="vote-col">
-          <form method="post" action="/q/${p.getId()}/upvote">
-            <button class="vote up" title="Upvote" aria-label="Upvote">▲</button>
-          </form>
+              <span class="vote-score">${p.getScore()}</span>
 
-          <div class="score">${p.getScore()}</div>
+              <form method="post" action="/q/${p.getId()}/downvote">
+                <button class="vote-btn down" type="submit" title="Downvote">▼</button>
+              </form>
+            </div>
 
-          <form method="post" action="/q/${p.getId()}/downvote">
-            <button class="vote down" title="Downvote" aria-label="Downvote">▼</button>
-          </form>
-        </div>
+            <div class="post-content">
+              <a class="post-title" href="/q/${p.getId()}">${p.getTitle()}</a>
 
-        <div class="content-col">
-          <a class="title" href="/q/${p.getId()}">${p.getTitle()}</a>
+              @if(!p.getSnippet().isEmpty())
+                <p class="post-snippet">${p.getSnippet()}</p>
+              @endif
 
-          @if(!p.getSnippet().isEmpty())
-            <p class="snippet">${p.getSnippet()}</p>
-          @endif
-
-          <div class="meta">
-            Posted ${p.getCreatedAtDisplay()}
-          </div>
-        </div>
-      </li>
-    @endfor
-  </ul>
-</main>
+              <div class="post-meta">
+                Posted ${p.getCreatedAtDisplay()}
+                @if(!p.getComments().isEmpty())
+                  • ${p.getComments().size()} comment${p.getComments().size() == 1 ? "" : "s"}
+                @endif
+              </div>
+            </div>
+          </li>
+        @endfor
+      </ul>
+    @endif
+  </main>
 </body>
 </html>
