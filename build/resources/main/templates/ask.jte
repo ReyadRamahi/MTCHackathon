@@ -1,5 +1,4 @@
-@template("base.jte")
-
+!{var content = @`
 <h1>Ask anonymously</h1>
 <form method="post" action="/ask" style="display:flex;flex-direction:column;gap:10px;max-width:720px">
   <input name="title" placeholder="Title" required
@@ -10,3 +9,6 @@
     Post
   </button>
 </form>
+`;}
+
+@template.base(content = content)

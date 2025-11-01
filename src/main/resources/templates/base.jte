@@ -1,3 +1,5 @@
+@param gg.jte.Content content
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -13,8 +15,7 @@
     </nav>
   </header>
   <main class="container">
-    @param content
-    @content()
+    ${content}
   </main>
 </body>
 </html>

@@ -1,6 +1,6 @@
-@template("base.jte")
 @param app.Post post
 
+!{var content = @`
 <h1>${post.title}</h1>
 <div class="meta">Posted ${post.getCreatedAtDisplay()}</div>
 @if(post.body != null && !post.body.isEmpty())
@@ -9,3 +9,6 @@
 
 <p>(Scholar answers coming soon)</p>
 <p><a href="/">Back</a></p>
+`;}
+
+@template.base(content = content)

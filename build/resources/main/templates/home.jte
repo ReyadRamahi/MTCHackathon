@@ -1,6 +1,6 @@
 @param app.HomeView vm
-@template("base.jte")
 
+!{var content = @`
 <h1>Newest questions</h1>
 <p><a href="/ask">Ask anonymously</a></p>
 
@@ -15,7 +15,7 @@
         <form method="post" action="/upvote/${p.id}">
           <button class="vote-btn" title="Upvote">&#9650;</button>
         </form>
-        <div class="count">0</div>
+        <div class="count">${p.getUpvotes()}</div>
         <form method="post" action="/downvote/${p.id}">
           <button class="vote-btn" title="Downvote">&#9660;</button>
         </form>
@@ -30,3 +30,6 @@
     </li>
   @endfor
 </ul>
+`;}
+
+@template.base(content = content)

@@ -2,12 +2,17 @@ plugins {
     id 'java'
     id 'application'
 }
+
 repositories { mavenCentral() }
+
 dependencies {
     implementation 'io.javalin:javalin:6.4.0'
-    implementation 'io.javalin:javalin-rendering:6.4.0'  // <- add this
-    implementation 'gg.jte:jte:3.1.12'                   // <- keep core jte only
+    implementation 'io.javalin:javalin-rendering:6.4.0'
+    implementation 'gg.jte:jte:3.1.12'
     implementation 'org.slf4j:slf4j-simple:2.0.12'
+
+    implementation 'org.xerial:sqlite-jdbc:3.46.0.0'
+    implementation 'org.mindrot:jbcrypt:0.4'
 }
 
 application {
