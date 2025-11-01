@@ -6,7 +6,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${post.getTitle()} - Amaanah</title>
+  <title>${post.getTitle()} - Amaaneh</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -35,9 +35,15 @@
           @endif
 
           <div class="post-meta">
-            Posted ${post.getCreatedAtDisplay()}
+            <span class="author-badge">Anonymous</span>
+            • Posted ${post.getCreatedAtDisplay()}
             @if(me != null && post.getOwnerUid() != null && post.getOwnerUid().equals(me.getId()))
               • <a href="/q/${post.getId()}/edit" style="color: #3d7a52; font-weight: 600;">Edit</a>
+            @endif
+            @if(me != null && me.getRole() == app.Role.ADMIN)
+              <form method="post" action="/admin/posts/${post.getId()}/delete" style="display:inline">
+                <button class="btn btn-danger btn-xs">Delete Post</button>
+              </form>
             @endif
           </div>
         </div>
@@ -58,7 +64,11 @@
               <li class="comment-item">
                 <div class="comment-body">${c.getBody()}</div>
                 <div class="comment-meta">
-                  <strong style="color: #3d7a52;">Scholar</strong> • ${c.getCreatedAtDisplay()}
+                  <span class="role-badge role-${c.getAuthorRole().name().toLowerCase()}" style="display: inline-block; margin-right: 8px;">
+                    ${c.getAuthorRole().name()}
+                  </span>
+                  <strong style="color: #3d7a52;">${c.getAuthorName()}</strong>
+                  • ${c.getCreatedAtDisplay()}
                 </div>
               </li>
             @endfor

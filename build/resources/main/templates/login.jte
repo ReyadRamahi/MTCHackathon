@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Log In - Amaanah</title>
+  <title>Log In - Amaaneh</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -40,7 +40,7 @@
       </form>
 
       <div class="form-footer">
-        New to Amaanah? <a href="/signup">Sign up</a>
+        New to Amaaneh? <a href="/signup">Sign up</a>
       </div>
     </div>
   </main>

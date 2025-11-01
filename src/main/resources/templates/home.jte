@@ -6,7 +6,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Amaanah - Ask Questions, Get Scholar Answers</title>
+  <title>Amaaneh - Ask Questions, Get Scholar Answers</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -43,7 +43,8 @@
               @endif
 
               <div class="post-meta">
-                Posted ${p.getCreatedAtDisplay()}
+                <span class="author-badge">Anonymous</span>
+                • Posted ${p.getCreatedAtDisplay()}
                 @if(!p.getComments().isEmpty())
                   • ${p.getComments().size()} comment${p.getComments().size() == 1 ? "" : "s"}
                 @endif

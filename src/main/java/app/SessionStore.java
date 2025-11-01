@@ -1,21 +1,22 @@
+
+
 package app;
 
 import io.javalin.http.Context;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import io.javalin.http.Cookie;
 import io.javalin.http.SameSite;
-
-import java.time.Duration;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.UUID;
 
 public final class SessionStore {
     private static final Map<String, User> USERS = new ConcurrentHashMap<>();
 
+    /** Get or create a stable per-browser uid cookie (no login implied). */
     public static String getOrCreateUid(Context ctx) {
         String uid = ctx.cookie("uid");
         if (uid == null || uid.isBlank()) {
-            uid = UUID.randomUUID().toString();
+            uid = java.util.UUID.randomUUID().toString();
             Cookie c = new Cookie("uid", uid);
             c.setPath("/");
             c.setHttpOnly(true);
@@ -26,29 +27,29 @@ public final class SessionStore {
         return uid;
     }
 
+    /** Current logged-in user for this browser, or null if not logged in. */
     public static User currentUser(Context ctx) {
-        String uid = getOrCreateUid(ctx);
-        return USERS.computeIfAbsent(uid, k -> new User(uid, "anon", Role.USER));
+        String uid = ctx.cookie("uid");
+        return (uid == null) ? null : USERS.get(uid);   // <-- no computeIfAbsent here
     }
 
+    /** Bind DB user identity to this browser uid (login). */
     public static void login(Context ctx, User dbUser) {
-        String uid = getOrCreateUid(ctx);                  // keep the same browser uid
-        USERS.put(uid, new User(uid, dbUser.getDisplayName(), dbUser.getRole()));
+        String uid = getOrCreateUid(ctx); // keep / create cookie
+        // store only minimal session view (id = uid so ownership keeps working)
+        User sessionUser = new User(uid, dbUser.getDisplayName(), dbUser.getRole());
+        USERS.put(uid, sessionUser);
     }
 
+    /** Unbind identity but KEEP the uid cookie so post-ownership still works. */
     public static void logout(Context ctx) {
         String uid = ctx.cookie("uid");
-        if (uid != null) {
-            USERS.remove(uid);
-            ctx.removeCookie("uid");
-        }
+        if (uid != null) USERS.remove(uid);
+        // do NOT remove the cookie; otherwise you lose post edit-ownership
     }
-
     public static void promoteToScholar(String targetUid) {
         User u = USERS.get(targetUid);
         if (u != null) u.setRole(Role.SCHOLAR);
     }
 
-    // optional helper if you need to inspect
-    public static Map<String, User> users() { return USERS; }
 }

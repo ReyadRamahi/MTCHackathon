@@ -15,17 +15,23 @@ public class Post {
     private final Instant createdAt;
     private final AtomicInteger score = new AtomicInteger(0);
     private final List<Comment> comments = new ArrayList<>();
-
-    // NEW: who owns this post (browser/session uid)
     private final String ownerUid;
 
     public static class Comment {
         private final String body;
         private final Instant createdAt = Instant.now();
+        private final String authorName;
+        private final Role authorRole;
 
-        public Comment(String body) { this.body = body; }
+        public Comment(String body, String authorName, Role authorRole) {
+            this.body = body;
+            this.authorName = authorName;
+            this.authorRole = authorRole;
+        }
 
         public String getBody() { return body; }
+        public String getAuthorName() { return authorName; }
+        public Role getAuthorRole() { return authorRole; }
 
         public String getCreatedAtDisplay() {
             var fmt = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
@@ -34,12 +40,11 @@ public class Post {
         }
     }
 
-    // CHANGE: take ownerUid in the constructor
     public Post(int id, String title, String body, String ownerUid) {
         this.id = id;
         this.title = title == null ? "" : title;
         this.body = body == null ? "" : body;
-        this.ownerUid = ownerUid;                 // << store it
+        this.ownerUid = ownerUid;
         this.createdAt = Instant.now();
     }
 
@@ -47,7 +52,7 @@ public class Post {
     public int getId() { return id; }
     public String getTitle() { return title; }
     public String getBody() { return body; }
-    public String getOwnerUid() { return ownerUid; }   // << NEW
+    public String getOwnerUid() { return ownerUid; }
     public int getScore() { return score.get(); }
     public String getCreatedAtDisplay() {
         var fmt = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
@@ -58,12 +63,17 @@ public class Post {
     // voting
     public void applyVoteDelta(int delta) { if (delta != 0) score.addAndGet(delta); }
 
-    // editing helpers (you tried to call these)
+    // editing helpers
     public void setTitle(String title) { if (title != null && !title.isBlank()) this.title = title.trim(); }
     public void setBody(String body)   { this.body = (body == null) ? "" : body; }
 
-    // comments
-    public void addComment(String body) { if (body != null && !body.isBlank()) comments.add(new Comment(body.trim())); }
+    // comments - now with author info
+    public void addComment(String body, String authorName, Role authorRole) {
+        if (body != null && !body.isBlank()) {
+            comments.add(new Comment(body.trim(), authorName, authorRole));
+        }
+    }
+
     public List<Comment> getComments() { return Collections.unmodifiableList(comments); }
     public List<Comment> getCommentsNewestFirst() {
         var copy = new ArrayList<>(comments);
@@ -75,5 +85,8 @@ public class Post {
         if (body == null || body.isEmpty()) return "";
         int end = Math.min(140, body.length());
         return body.substring(0, end) + (end < body.length() ? "…" : "");
+    }
+    public void removeCommentAt(int idx) {
+        if (idx >= 0 && idx < comments.size()) comments.remove(idx);
     }
 }

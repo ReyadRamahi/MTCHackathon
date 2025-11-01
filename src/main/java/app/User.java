@@ -30,6 +30,9 @@ public class User {
 
     public boolean isAdmin()   { return role == Role.ADMIN; }
     public boolean isScholar() { return role == Role.SCHOLAR; }
+    public boolean isAnon() {
+        return role == Role.USER && "anon".equalsIgnoreCase(displayName);
+    }
 
     public String getPublicName() {
         return switch (role) {

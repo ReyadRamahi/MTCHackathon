@@ -1,33 +1,62 @@
+// Db.java
 package app;
 
 import java.sql.*;
-import java.util.Optional;
 import org.mindrot.jbcrypt.BCrypt;
+import java.util.*;
 
 public class Db {
+    private static final String URL = "jdbc:sqlite:app.db";
 
-    // Call this where you create schema:
-    // CREATE TABLE IF NOT EXISTS users(
-    //   id INTEGER PRIMARY KEY AUTOINCREMENT,
-    //   email TEXT UNIQUE NOT NULL,
-    //   display_name TEXT NOT NULL,
-    //   password_hash TEXT NOT NULL,
-    //   role TEXT NOT NULL
-    //);
+    public static Connection get() throws SQLException {
+        return DriverManager.getConnection(URL);
+    }
+
+    // call once on boot
+    public static void init() throws SQLException {
+        try (var conn = get(); var st = conn.createStatement()) {
+            st.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS users(
+                  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email         TEXT    NOT NULL UNIQUE,
+                  display_name  TEXT    NOT NULL,
+                  password_hash TEXT    NOT NULL,
+                  role          TEXT    NOT NULL,
+                  created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+            """);
+            st.executeUpdate("""
+            CREATE TABLE IF NOT EXISTS verification_requests(
+              id            INTEGER PRIMARY KEY AUTOINCREMENT,
+              uid           TEXT    NOT NULL,              -- session/browser uid (owner)
+              email         TEXT,                          -- optional contact
+              note          TEXT,                          -- user-provided details
+              file_path     TEXT,                          -- server-side stored path (NOT web-accessible)
+              file_name     TEXT,                          -- original filename (for admin display)
+              file_sha256   TEXT,                          -- integrity
+              status        TEXT    NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
+              decision_note TEXT,                          -- admin note
+              created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              decided_at    TEXT
+            );
+            """);
+        }
+    }
 
     public static boolean emailAvailable(String email) throws SQLException {
-        try (var conn = get(); var ps = conn.prepareStatement("SELECT 1 FROM users WHERE email = ?")) {
+        try (var conn = get();
+             var ps = conn.prepareStatement("SELECT 1 FROM users WHERE email=?")) {
             ps.setString(1, email);
             try (var rs = ps.executeQuery()) { return !rs.next(); }
         }
     }
 
-    public static void insertUser(String email, String displayName, String rawPassword, Role role) throws SQLException {
-        // Hash password before insert — replace with your hashing if needed
+    public static void insertUser(String email, String displayName, String rawPassword, Role role)
+            throws SQLException {
         String hash = BCrypt.hashpw(rawPassword, BCrypt.gensalt());
         try (var conn = get();
              var ps = conn.prepareStatement(
-                     "INSERT INTO users(email, display_name, password_hash, role) VALUES(?,?,?,?)")) {
+                     "INSERT INTO users(email,display_name,password_hash,role) VALUES (?,?,?,?)")) {
             ps.setString(1, email);
             ps.setString(2, (displayName == null || displayName.isBlank()) ? "anon" : displayName.trim());
             ps.setString(3, hash);
@@ -37,41 +66,146 @@ public class Db {
     }
 
     public static User findUserByEmail(String email) throws SQLException {
-        try (var conn = get(); var ps = conn.prepareStatement(
-                "SELECT id, email, display_name, role FROM users WHERE email = ?")) {
+        try (var conn = get();
+             var ps = conn.prepareStatement("SELECT id,email,display_name,role FROM users WHERE email=?")) {
             ps.setString(1, email);
             try (var rs = ps.executeQuery()) {
                 if (!rs.next()) return null;
-                return mapUser(rs);
+                return new User(
+                        String.valueOf(rs.getInt("id")),
+                        rs.getString("display_name"),
+                        Role.valueOf(rs.getString("role"))
+                );
             }
         }
     }
 
-    private static User mapUser(ResultSet rs) throws SQLException {
-        // id from DB is int; our User.id is the browser uid – for DB user objects
-        // we only need displayName + role to mirror into the session.
-        String display = rs.getString("display_name");
-        Role role = Role.valueOf(rs.getString("role"));
-        // The session layer will copy display/role onto the browser-uid.
-        return new User("db", display, role);
-    }
-
-    // You already had this in your file:
     public static boolean checkPassword(String email, String rawPassword) throws SQLException {
-        try (var conn = get(); var ps = conn.prepareStatement(
-                "SELECT password_hash FROM users WHERE email = ?")) {
+        try (var conn = get();
+             var ps = conn.prepareStatement("SELECT password_hash FROM users WHERE email=?")) {
             ps.setString(1, email);
             try (var rs = ps.executeQuery()) {
                 if (!rs.next()) return false;
-                String hashed = rs.getString("password_hash");
-                return BCrypt.checkpw(rawPassword, hashed);
+                return BCrypt.checkpw(rawPassword, rs.getString("password_hash"));
+            }
+        }
+    }
+    //helpers for diploma verification
+    public static void insertVerificationRequest(
+            String uid, String email, String note,
+            String filePath, String fileName, String sha256
+    ) throws SQLException {
+        try (var conn = get(); var ps = conn.prepareStatement(
+                "INSERT INTO verification_requests(uid,email,note,file_path,file_name,file_sha256) VALUES(?,?,?,?,?,?)"
+        )) {
+            ps.setString(1, uid);
+            ps.setString(2, email);
+            ps.setString(3, note);
+            ps.setString(4, filePath);
+            ps.setString(5, fileName);
+            ps.setString(6, sha256);
+            ps.executeUpdate();
+        }
+    }
+
+    // --- Verification admin helpers ---
+
+    public static java.util.List<java.util.Map<String,Object>> listPendingRequests() throws SQLException {
+        try (var conn = get();
+             var ps   = conn.prepareStatement(
+                     "SELECT id, uid, email, note, file_name, created_at " +
+                             "FROM verification_requests WHERE status='pending' ORDER BY created_at ASC")) {
+            try (var rs = ps.executeQuery()) {
+                var out = new java.util.ArrayList<java.util.Map<String,Object>>();
+                while (rs.next()) {
+                    out.add(java.util.Map.of(
+                            "id",        rs.getInt("id"),
+                            "uid",       rs.getString("uid"),
+                            "email",     rs.getString("email"),
+                            "note",      rs.getString("note"),
+                            "file_name", rs.getString("file_name"),
+                            "created_at",rs.getString("created_at")
+                    ));
+                }
+                return out;
             }
         }
     }
 
-    // Your connection helper (adjust to your project)
-    private static Connection get() throws SQLException {
-        // example: return DriverManager.getConnection("jdbc:sqlite:app.db");
-        return DriverManager.getConnection("jdbc:sqlite:app.db");
+    public static void approveVerification(int requestId, String reviewerUid) throws SQLException {
+        // 1) fetch uid
+        String uid;
+        try (var conn = get();
+             var ps = conn.prepareStatement("SELECT uid FROM verification_requests WHERE id=? AND status='pending'")) {
+            ps.setInt(1, requestId);
+            try (var rs = ps.executeQuery()) {
+                if (!rs.next()) return;
+                uid = rs.getString("uid");
+            }
+        }
+        // 2) promote user and mark reviewed
+        try (var conn = get()) {
+            try (var ps1 = conn.prepareStatement("UPDATE users SET role='SCHOLAR' WHERE id=?")) {
+                ps1.setInt(1, Integer.parseInt(uid)); // if your uid is not numeric, adapt this
+                ps1.executeUpdate();
+            } catch (NumberFormatException ignore) {
+                // If uid is a random UUID not equal to users.id, adapt to your own mapping.
+            }
+            try (var ps2 = conn.prepareStatement(
+                    "UPDATE verification_requests SET status='approved', reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?")) {
+                ps2.setString(1, reviewerUid);
+                ps2.setInt(2, requestId);
+                ps2.executeUpdate();
+            }
+        }
+    }
+
+    public static void rejectVerification(int requestId, String reviewerUid) throws SQLException {
+        try (var conn = get();
+             var ps = conn.prepareStatement(
+                     "UPDATE verification_requests SET status='rejected', reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'")) {
+            ps.setString(1, reviewerUid);
+            ps.setInt(2, requestId);
+            ps.executeUpdate();
+        }
+    }
+
+    public static Map<String,String> getRequest(int id) throws SQLException {
+        try (var conn = get(); var ps = conn.prepareStatement(
+                "SELECT * FROM verification_requests WHERE id=?"
+        )) {
+            ps.setInt(1, id);
+            try (var rs = ps.executeQuery()) {
+                if (!rs.next()) return null;
+                return Map.of(
+                        "id", String.valueOf(rs.getInt("id")),
+                        "uid", rs.getString("uid"),
+                        "email", rs.getString("email"),
+                        "note", rs.getString("note"),
+                        "file_path", rs.getString("file_path"),
+                        "file_name", rs.getString("file_name")
+                );
+            }
+        }
+    }
+
+    public static void approveRequest(int id, String decisionNote) throws SQLException {
+        try (var conn = get(); var ps = conn.prepareStatement(
+                "UPDATE verification_requests SET status='approved', decision_note=?, decided_at=CURRENT_TIMESTAMP WHERE id=?"
+        )) {
+            ps.setString(1, decisionNote);
+            ps.setInt(2, id);
+            ps.executeUpdate();
+        }
+    }
+
+    public static void rejectRequest(int id, String decisionNote) throws SQLException {
+        try (var conn = get(); var ps = conn.prepareStatement(
+                "UPDATE verification_requests SET status='rejected', decision_note=?, decided_at=CURRENT_TIMESTAMP WHERE id=?"
+        )) {
+            ps.setString(1, decisionNote);
+            ps.setInt(2, id);
+            ps.executeUpdate();
+        }
     }
 }
