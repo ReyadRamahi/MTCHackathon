@@ -1,35 +1,57 @@
+@param app.User me
 @param app.HomeView vm
+@import header.jte
 
-!{var content = @`
-<h1>Newest questions</h1>
-<p><a href="/ask">Ask anonymously</a></p>
+@header(me)
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Amaanah • Newest</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="site">
+<header class="site-header">
+  <a class="home-link" href="/">Amaanah</a> ·
+  <a class="ask-link" href="/ask">Ask anonymously</a>
+</header>
 
-@if(!vm.hasPosts())
-  <p>No questions yet.</p>
-@endif
+<main class="feed">
+  <h1 class="page-title">Newest questions</h1>
 
-<ul class="feed">
-  @for(app.Post p : vm.getPostsNewestFirst())
-    <li class="post">
-      <div class="votes">
-        <form method="post" action="/upvote/${p.id}">
-          <button class="vote-btn" title="Upvote">&#9650;</button>
-        </form>
-        <div class="count">${p.getUpvotes()}</div>
-        <form method="post" action="/downvote/${p.id}">
-          <button class="vote-btn" title="Downvote">&#9660;</button>
-        </form>
-      </div>
-      <div class="body">
-        <a class="title" href="/q/${p.id}">${p.title}</a>
-        <div class="meta">Posted ${p.getCreatedAtDisplay()}</div>
-        @if(!p.getSnippet().isEmpty())
-          <div class="snippet">${p.getSnippet()}</div>
-        @endif
-      </div>
-    </li>
-  @endfor
-</ul>
-`;}
+  @if(!vm.hasPosts())
+    <p class="empty">No questions yet.</p>
+  @endif
 
-@template.base(content = content)
+  <ul class="post-list">
+    @for(app.Post p : vm.getPostsNewestFirst())
+      <li class="post-row">
+        <div class="vote-col">
+          <form method="post" action="/q/${p.getId()}/upvote">
+            <button class="vote up" title="Upvote" aria-label="Upvote">▲</button>
+          </form>
+
+          <div class="score">${p.getScore()}</div>
+
+          <form method="post" action="/q/${p.getId()}/downvote">
+            <button class="vote down" title="Downvote" aria-label="Downvote">▼</button>
+          </form>
+        </div>
+
+        <div class="content-col">
+          <a class="title" href="/q/${p.getId()}">${p.getTitle()}</a>
+
+          @if(!p.getSnippet().isEmpty())
+            <p class="snippet">${p.getSnippet()}</p>
+          @endif
+
+          <div class="meta">
+            Posted ${p.getCreatedAtDisplay()}
+          </div>
+        </div>
+      </li>
+    @endfor
+  </ul>
+</main>
+</body>
+</html>

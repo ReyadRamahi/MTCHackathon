@@ -1,199 +1,254 @@
 package app;
 
-import gg.jte.TemplateEngine;
-import gg.jte.ContentType;
-import gg.jte.resolve.DirectoryCodeResolver;
-
 import io.javalin.Javalin;
 import io.javalin.http.Context;
-import io.javalin.rendering.template.JavalinJte;
 
-import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.nio.file.Path;
+
+import gg.jte.ContentType;
+import gg.jte.TemplateEngine;
+import gg.jte.resolve.DirectoryCodeResolver;
 
 public class Main {
 
-    // In-memory "posts" store (id = index)
-    private static final List<Post> POSTS = new CopyOnWriteArrayList<>();
-
-    // For voting: uid(cookie) -> (postId -> vote), where vote ∈ {-1,0,+1}
-    private static final ConcurrentMap<String, ConcurrentMap<Integer, Integer>> USER_VOTES = new ConcurrentHashMap<>();
+    private static final List<Post> POSTS = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private static final Map<String, Map<Integer, Integer>> VOTES_BY_USER = new java.util.concurrent.ConcurrentHashMap<>();
 
     public static void main(String[] args) {
-        // ---- DB + Templating setup ----
-        Db.init("app.db"); // creates/opens SQLite file
 
-        var templatesDir = Path.of("src/main/resources/templates").toAbsolutePath();
+        // --- Template engine setup ---
+        Path templatesDir = Path.of("src/main/resources/templates").toAbsolutePath();
         TemplateEngine engine = TemplateEngine.create(new DirectoryCodeResolver(templatesDir), ContentType.Html);
 
+        // --- Javalin app ---
         Javalin app = Javalin.create(cfg -> {
-            cfg.staticFiles.add("/public");         // serve /styles.css etc.
-            cfg.fileRenderer(new JavalinJte(engine));
+            cfg.fileRenderer(new io.javalin.rendering.template.JavalinJte(engine));
+            cfg.staticFiles.add("/public");
         });
 
-        // Attach logged-in user (if any) to every request
-        app.before(ctx -> {
-            var sid = ctx.cookie("sid");
-            var uid = SessionStore.getUserId(sid);
-            if (uid != null) {
-                try {
-                    var me = Db.findUserById(uid);
-                    if (me != null) ctx.attribute("user", me);
-                } catch (Exception ignored) {}
-            }
+        // ===== Authorization Guard (v6) =====
+        app.beforeMatched(ctx -> {
+            User u = SessionStore.currentUser(ctx);
+            Role caller = (u == null) ? Role.USER : u.getRole();
+            var required = ctx.routeRoles();
+            if (required == null || required.isEmpty()) return; // public route
+            if (required.contains(caller)) return;
+            ctx.status(403).result("Forbidden");
         });
 
-        // ---- Feed ----
-        app.get("/", ctx -> ctx.render("home.jte", Map.of("vm", new HomeView(POSTS))));
+        // ======= ROUTES =======
 
-        // ---- Ask (anonymous) ----
-        app.get("/ask", ctx -> ctx.render("ask.jte"));
+        // --- Home feed ---
+        app.get("/", ctx -> {
+            HomeView vm = new HomeView(POSTS);
+            ctx.render("home.jte", Map.of("vm", vm, "me", SessionStore.currentUser(ctx)));
+        });
+
+        // --- Ask a question ---
+        app.get("/ask", ctx -> ctx.render("ask.jte", Map.of("me", SessionStore.currentUser(ctx))));
         app.post("/ask", ctx -> {
-            String title = ctx.formParam("title");
-            String body  = ctx.formParam("body");
-            if (title != null && !title.trim().isEmpty()) {
-                POSTS.add(new Post(POSTS.size(), title.trim(), body == null ? "" : body.trim()));
+            String title = param(ctx, "title");
+            String body = param(ctx, "body");
+            if (title == null || title.isBlank()) {
+                ctx.status(400).result("Title required");
+                return;
+            }
+            int id = POSTS.size();
+            POSTS.add(new Post(id, title, body == null ? "" : body));
+            ctx.redirect("/");
+        });
+
+        // --- View question ---
+        app.get("/q/{id}", ctx -> {
+            Post p = findPostOr404(ctx);
+            ctx.render("question.jte", Map.of("post", p, "me", SessionStore.currentUser(ctx)));
+        });
+
+        // --- Comment (requires SCHOLAR or ADMIN) ---
+        app.post("/q/{id}/comment", ctx -> {
+            Post p = findPostOr404(ctx);
+            String body = param(ctx, "body");
+            if (body == null || body.isBlank()) {
+                ctx.status(400).result("Comment required");
+                return;
+            }
+            User me = SessionStore.currentUser(ctx);
+            if (me.getRole() == Role.USER) {
+                ctx.status(403).result("Only verified scholars or admins may comment");
+                return;
+            }
+            p.addComment(body);
+            ctx.redirect("/q/" + p.getId());
+        }, Role.SCHOLAR, Role.ADMIN);
+
+        // --- Upvote ---
+        app.post("/q/{id}/upvote", ctx -> {
+            Post p = findPostOr404(ctx);
+            String uid = getUserId(ctx);
+            int before = getUserVote(uid, p.getId());
+            if (before != +1) {
+                setUserVote(uid, p.getId(), +1);
+                p.applyVoteDelta(+1 - before);
             }
             ctx.redirect("/");
         });
 
-        // ---- View single question ----
-        app.get("/q/{id}", ctx -> {
-            int id = parseId(ctx);
-            if (!validId(id)) { notFound(ctx); return; }
-            ctx.render("question.jte", Map.of("post", POSTS.get(id)));
+        // --- Downvote ---
+        app.post("/q/{id}/downvote", ctx -> {
+            Post p = findPostOr404(ctx);
+            String uid = getUserId(ctx);
+            int before = getUserVote(uid, p.getId());
+            if (before != -1) {
+                setUserVote(uid, p.getId(), -1);
+                p.applyVoteDelta(-1 - before);
+            }
+            ctx.redirect("/");
         });
 
-        // ---- Voting (single vote per user) ----
-        app.post("/upvote/{id}",   ctx -> { int id = parseId(ctx); if (!validId(id)) { notFound(ctx); return; } applyVote(ctx, id, +1); });
-        app.post("/downvote/{id}", ctx -> { int id = parseId(ctx); if (!validId(id)) { notFound(ctx); return; } applyVote(ctx, id, -1); });
-        app.post("/unvote/{id}",   ctx -> { int id = parseId(ctx); if (!validId(id)) { notFound(ctx); return; } applyVote(ctx, id,  0); });
+        // ===== ACCOUNT MANAGEMENT =====
 
-        // ---- Auth pages (quick forms for now) ----
-        final String SCHOLAR_INVITE = "UMMAH2025"; // change this
+        app.get("/signup", ctx -> ctx.render("signup.jte"));
+        app.post("/signup", Main::handleSignup);
 
-        app.get("/signup", ctx -> ctx.result("""
-            <form method='post' action='/signup' style='max-width:360px'>
-              <input name='email' placeholder='email' style='width:100%'><br>
-              <input name='name'  placeholder='display name' style='width:100%'><br>
-              <input type='password' name='password' placeholder='password' style='width:100%'><br>
-              <input name='invite' placeholder='scholar invite (optional)' style='width:100%'><br>
-              <button type='submit'>Create account</button>
-            </form>
-        """));
-
-        app.get("/login", ctx -> ctx.result("""
-            <form method='post' action='/login' style='max-width:360px'>
-              <input name='email' placeholder='email' style='width:100%'><br>
-              <input type='password' name='password' placeholder='password' style='width:100%'><br>
-              <button type='submit'>Log in</button>
-            </form>
-        """));
-
-        app.post("/signup", ctx -> {
-            var email  = param(ctx, "email");
-            var name   = param(ctx, "name");
-            var pass   = param(ctx, "password");
-            var invite = param(ctx, "invite");
-            if (email == null || name == null || pass == null) { ctx.status(400).result("Missing fields"); return; }
-            var role = (invite != null && invite.equals(SCHOLAR_INVITE)) ? Role.SCHOLAR : Role.USER;
-            try {
-                if (Db.findUserByEmail(email) != null) { ctx.status(409).result("Email already registered"); return; }
-                int uid = Db.createUser(email, name, pass, role);
-                var sid = SessionStore.create(uid);
-                ctx.cookie("sid", sid, 60*60*24*7);
-                ctx.redirect("/");
-            } catch (Exception e) { ctx.status(500).result("Signup error"); }
-        });
-
-        app.post("/login", ctx -> {
-            var email = param(ctx, "email");
-            var pass  = param(ctx, "password");
-            if (email == null || pass == null) { ctx.status(400).result("Missing"); return; }
-            try {
-                if (!Db.checkPassword(email, pass)) { ctx.status(401).result("Invalid credentials"); return; }
-                var me  = Db.findUserByEmail(email);
-                var sid = SessionStore.create(me.id);
-                ctx.cookie("sid", sid, 60*60*24*7);
-                ctx.redirect("/");
-            } catch (Exception e) { ctx.status(500).result("Login error"); }
-        });
+        app.get("/login", ctx -> ctx.render("login.jte"));
+        app.post("/login", Main::handleLogin);
 
         app.post("/logout", ctx -> {
-            var sid = ctx.cookie("sid");
-            SessionStore.remove(sid);
-            ctx.removeCookie("sid");
+            SessionStore.logout(ctx);
             ctx.redirect("/");
         });
 
-        // ---- Scholar-only: answer a question ----
-        app.post("/q/{id}/answer", ctx -> {
-            int id = parseId(ctx);
-            if (!validId(id)) { notFound(ctx); return; }
+        // ===== VERIFICATION =====
+        app.get("/verify", ctx -> {
+            User me = SessionStore.currentUser(ctx);
+            ctx.render("verify.jte", Map.of("me", me));
+        });
 
-            var me = (User) ctx.attribute("user");
-            if (me == null || !me.isScholar()) { ctx.status(403).result("Scholars only"); return; }
-
-            var body = param(ctx, "body");
-            if (body == null || body.isBlank()) { ctx.status(400).result("Empty answer"); return; }
-
+        app.post("/verify/request", ctx -> {
+            User me = SessionStore.currentUser(ctx);
+            String note = param(ctx, "note");
             try {
-                Db.insertAnswer(id, me.id, body.trim());
-                ctx.redirect("/q/" + id);
-            } catch (Exception e) { ctx.status(500).result("Could not save answer"); }
+                Db.createVerificationRequest(me.getId(), note);
+                ctx.redirect("/verify");
+            } catch (Exception e) {
+                ctx.status(500).result("Error submitting request");
+            }
+        });
+
+        // ===== ADMIN: Approve verification =====
+        app.get("/admin/verify", ctx -> {
+            requireRole(ctx, Role.ADMIN);
+            try {
+                var pending = Db.listPendingRequests();
+                ctx.render("admin_verify.jte", Map.of("pending", pending, "me", SessionStore.currentUser(ctx)));
+            } catch (Exception e) {
+                ctx.status(500).result("Error loading verification list");
+            }
+        });
+
+        app.post("/admin/verify/{id}/approve", ctx -> {
+            requireRole(ctx, Role.ADMIN);
+            int id = Integer.parseInt(ctx.pathParam("id"));
+            try {
+                Db.approveVerification(id);
+                ctx.redirect("/admin/verify");
+            } catch (Exception e) {
+                ctx.status(500).result("Error approving");
+            }
+        });
+
+        app.post("/admin/verify/{id}/reject", ctx -> {
+            requireRole(ctx, Role.ADMIN);
+            int id = Integer.parseInt(ctx.pathParam("id"));
+            try {
+                Db.rejectVerification(id);
+                ctx.redirect("/admin/verify");
+            } catch (Exception e) {
+                ctx.status(500).result("Error rejecting");
+            }
         });
 
         app.start(7001);
     }
 
-    // ---------------- helpers ----------------
+    // ===== Helper methods =====
 
-    private static void applyVote(Context ctx, int postId, int newVoteRaw) {
-        int newVote = Integer.compare(newVoteRaw, 0); // normalize to -1,0,+1
-        String uid = getOrSetUserIdCookie(ctx);
-        USER_VOTES.putIfAbsent(uid, new ConcurrentHashMap<>());
-        var votes = USER_VOTES.get(uid);
-
-        int oldVote = votes.getOrDefault(postId, 0);
-        int delta = newVote - oldVote;
-
-        if (delta != 0) {
-            POSTS.get(postId).applyVoteDelta(delta);
-            votes.put(postId, newVote);
-        }
-        var back = ctx.header("Referer");
-        ctx.redirect(back != null ? back : "/");
+    private static String param(Context ctx, String name) {
+        String v = ctx.formParam(name);
+        return (v == null || v.isBlank()) ? null : v.trim();
     }
 
-    private static String getOrSetUserIdCookie(Context ctx) {
+    private static Post findPostOr404(Context ctx) {
+        int id = Integer.parseInt(ctx.pathParam("id"));
+        if (id < 0 || id >= POSTS.size()) {
+            ctx.status(404).result("Not found");
+            throw new IllegalStateException("Post not found");
+        }
+        return POSTS.get(id);
+    }
+
+    private static String getUserId(Context ctx) {
         String uid = ctx.cookie("uid");
-        if (uid == null || uid.isBlank()) {
+        if (uid == null) {
             uid = UUID.randomUUID().toString();
-            ctx.cookie("uid", uid, 60 * 60 * 24 * 30); // 30 days
+            ctx.cookie("uid", uid);
         }
         return uid;
     }
 
-    private static int parseId(Context ctx) {
-        try { return Integer.parseInt(ctx.pathParam("id")); }
-        catch (Exception e) { return -1; }
+    private static int getUserVote(String uid, int postId) {
+        return VOTES_BY_USER.getOrDefault(uid, Map.of()).getOrDefault(postId, 0);
     }
 
-    private static boolean validId(int id) {
-        return id >= 0 && id < POSTS.size();
+    private static void setUserVote(String uid, int postId, int value) {
+        VOTES_BY_USER.computeIfAbsent(uid, k -> new java.util.concurrent.ConcurrentHashMap<>()).put(postId, value);
     }
 
-    private static void notFound(Context ctx) {
-        ctx.status(404).result("Post not found");
+    private static void handleSignup(Context ctx) {
+        String email = param(ctx, "email");
+        String display = param(ctx, "display");
+        String password = param(ctx, "password");
+        if (email == null || password == null) {
+            ctx.status(400).result("Missing email or password");
+            return;
+        }
+        try {
+            if (!Db.emailAvailable(email)) {
+                ctx.status(400).result("Email already in use");
+                return;
+            }
+            User u = Db.createUser(email, display, password);
+            SessionStore.login(ctx, u);
+            ctx.redirect("/");
+        } catch (Exception e) {
+            ctx.status(500).result("Signup failed");
+        }
     }
 
-    private static String param(Context ctx, String name) {
-        var v = ctx.formParam(name);
-        return (v == null || v.isBlank()) ? null : v.trim();
+    private static void handleLogin(Context ctx) {
+        String email = param(ctx, "email");
+        String password = param(ctx, "password");
+        try {
+            if (!Db.checkPassword(email, password)) {
+                ctx.status(401).result("Invalid credentials");
+                return;
+            }
+            User u = Db.findUserByEmail(email).orElseThrow();
+            SessionStore.login(ctx, u);
+            ctx.redirect("/");
+        } catch (Exception e) {
+            ctx.status(500).result("Login failed");
+        }
+    }
+
+    private static void requireRole(Context ctx, Role minRole) {
+        User u = SessionStore.currentUser(ctx);
+        if (u == null || u.getRole().ordinal() < minRole.ordinal()) {
+            ctx.status(403).result("Forbidden");
+            throw new IllegalStateException("Forbidden");
+        }
     }
 }

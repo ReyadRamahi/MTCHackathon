@@ -1,4 +1,9 @@
-!{var content = @`
+@param app.User me
+@import header.jte
+
+@header(me)
+<!DOCTYPE html>
+<html>
 <h1>Ask anonymously</h1>
 <form method="post" action="/ask" style="display:flex;flex-direction:column;gap:10px;max-width:720px">
   <input name="title" placeholder="Title" required

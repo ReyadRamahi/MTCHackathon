@@ -1,2 +1,7 @@
 package app;
-public enum Role { USER, SCHOLAR, ADMIN }
+
+import io.javalin.security.RouteRole;
+
+public enum Role implements RouteRole {
+    ADMIN, SCHOLAR, USER
+}
