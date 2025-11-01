@@ -31,6 +31,14 @@ public class User {
     public boolean isAdmin()   { return role == Role.ADMIN; }
     public boolean isScholar() { return role == Role.SCHOLAR; }
 
+    public String getPublicName() {
+        return switch (role) {
+            case ADMIN   -> "Admin";
+            case USER    -> "Anonymous";
+            case SCHOLAR -> (displayName == null || displayName.isBlank()) ? "Scholar" : displayName;
+        };
+    }
+
     @Override public boolean equals(Object o) {
         return (o instanceof User u) && Objects.equals(id, u.id);
     }

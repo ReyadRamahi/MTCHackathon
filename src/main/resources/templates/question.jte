@@ -27,12 +27,6 @@
           </form>
         </div>
 
-          @if(me != null && post.getOwnerUid() == me.getId())
-            <div class="post-actions">
-              <a class="btn edit-btn" href="/q/${post.getId()}/edit" title="Edit your question">Edit</a>
-            </div>
-          @end
-
         <div class="post-body">
           <h1 class="post-heading">${post.getTitle()}</h1>
 
@@ -42,6 +36,9 @@
 
           <div class="post-meta">
             Posted ${post.getCreatedAtDisplay()}
+            @if(me != null && post.getOwnerUid() != null && post.getOwnerUid().equals(me.getId()))
+              • <a href="/q/${post.getId()}/edit" style="color: #3d7a52; font-weight: 600;">Edit</a>
+            @endif
           </div>
         </div>
       </article>
@@ -52,7 +49,7 @@
         </h2>
 
         @if(post.getComments().isEmpty())
-          <p style="color: #7c7c7c; font-size: 14px; margin-bottom: 20px;">
+          <p style="color: #9a8b6f; font-size: 14px; margin-bottom: 20px;">
             No comments yet. Be the first to respond!
           </p>
         @else
@@ -61,7 +58,7 @@
               <li class="comment-item">
                 <div class="comment-body">${c.getBody()}</div>
                 <div class="comment-meta">
-                  <strong style="color: #0079d3;">Scholar</strong> • ${c.getCreatedAtDisplay()}
+                  <strong style="color: #3d7a52;">Scholar</strong> • ${c.getCreatedAtDisplay()}
                 </div>
               </li>
             @endfor
@@ -81,13 +78,13 @@
             </div>
           </form>
         @elseif(me != null && me.getRole() == app.Role.USER)
-          <div style="background: #f6f7f8; padding: 16px; border-radius: 4px; text-align: center; color: #7c7c7c;">
+          <div style="background: #f9f6f0; padding: 16px; border-radius: 4px; text-align: center; color: #9a8b6f;">
             <p>Only verified scholars can comment.</p>
-            <a href="/verify" style="color: #0079d3; font-weight: 600;">Request verification</a>
+            <a href="/verify" style="color: #3d7a52; font-weight: 600;">Request verification</a>
           </div>
         @else
-          <div style="background: #f6f7f8; padding: 16px; border-radius: 4px; text-align: center; color: #7c7c7c;">
-            <p><a href="/login" style="color: #0079d3; font-weight: 600;">Log in</a> to comment</p>
+          <div style="background: #f9f6f0; padding: 16px; border-radius: 4px; text-align: center; color: #9a8b6f;">
+            <p><a href="/login" style="color: #3d7a52; font-weight: 600;">Log in</a> to comment</p>
           </div>
         @endif
       </section>

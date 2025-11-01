@@ -1,54 +1,64 @@
 package app;
 
 import io.javalin.Javalin;
+import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
-
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.nio.file.Path;
+import io.javalin.rendering.template.JavalinJte;
 
 import gg.jte.ContentType;
 import gg.jte.TemplateEngine;
 import gg.jte.resolve.DirectoryCodeResolver;
 
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+
 public class Main {
 
-    private static final List<Post> POSTS = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private static final Map<String, Map<Integer, Integer>> VOTES_BY_USER = new java.util.concurrent.ConcurrentHashMap<>();
+    // -------- In-memory “DB-ish” storage --------
+    private static final List<Post> POSTS = new CopyOnWriteArrayList<>();
+
+    // user cookie uid -> (postId -> -1/0/+1) to rate-limit per user
+    private static final Map<String, Map<Integer, Integer>> VOTES_BY_USER = new ConcurrentHashMap<>();
+
+    // postId -> ownerUid (so only the author can edit)
+    private static final Map<Integer, String> POST_OWNER = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
 
-        // --- Template engine setup ---
+        // ----- JTE engine -----
         Path templatesDir = Path.of("src/main/resources/templates").toAbsolutePath();
         TemplateEngine engine = TemplateEngine.create(new DirectoryCodeResolver(templatesDir), ContentType.Html);
 
-        // --- Javalin app ---
-        Javalin app = Javalin.create(cfg -> {
-            cfg.fileRenderer(new io.javalin.rendering.template.JavalinJte(engine));
-            cfg.staticFiles.add("/public");
+        // ----- Javalin app -----
+        Javalin app = Javalin.create((JavalinConfig cfg) -> {
+            cfg.fileRenderer(new JavalinJte(engine)); // render *.jte
+            cfg.staticFiles.add("/public");           // /styles.css etc.
         });
 
-        // ===== Authorization Guard (v6) =====
-        app.beforeMatched(ctx -> {
-            User u = SessionStore.currentUser(ctx);
-            Role caller = (u == null) ? Role.USER : u.getRole();
-            var required = ctx.routeRoles();
-            if (required == null || required.isEmpty()) return; // public route
-            if (required.contains(caller)) return;
-            ctx.status(403).result("Forbidden");
-        });
+        // ----- Routes -----
 
-        // ======= ROUTES =======
-
-        // --- Home feed ---
+        // Home (feed)
         app.get("/", ctx -> {
             HomeView vm = new HomeView(POSTS);
-            ctx.render("home.jte", Map.of("vm", vm, "me", SessionStore.currentUser(ctx)));
+            ctx.render("home.jte", Map.of(
+                    "vm", vm,
+                    "me", SessionStore.currentUser(ctx)   // for header chip
+            ));
         });
 
-        // --- Ask a question ---
-        app.get("/ask", ctx -> ctx.render("ask.jte", Map.of("me", SessionStore.currentUser(ctx))));
+        // Ask (GET) – create new OR reuse for edit (your ask.jte already supports 'mode' + 'post')
+        app.get("/ask", ctx -> {
+            ctx.render("ask.jte", Map.of(
+                    "mode", "new",
+                    "me", SessionStore.currentUser(ctx)
+            ));
+        });
+
+        // Ask (POST) – create post, record ownership by cookie uid
         app.post("/ask", ctx -> {
             String title = param(ctx, "title");
             String body  = param(ctx, "body");
@@ -56,43 +66,56 @@ public class Main {
                 ctx.status(400).result("Title required");
                 return;
             }
-            var me = SessionStore.currentUser(ctx);   // uses your uid cookie
-            if (me == null) {                         // should not happen if SessionStore ensures a user
-                me = SessionStore.currentUser(ctx);
-            }
             int id = POSTS.size();
-            POSTS.add(new Post(id, me.getId(), title, body));
+            String ownerUid = getOrCreateUid(ctx);
+            POSTS.add(new Post(id, title, body, ownerUid));
+            POST_OWNER.put(id, ownerUid);
+
             ctx.redirect("/");
         });
 
-
-        // --- View question ---
+        // View single post
         app.get("/q/{id}", ctx -> {
             Post p = findPostOr404(ctx);
-            ctx.render("question.jte", Map.of("post", p, "me", SessionStore.currentUser(ctx)));
-        });
-
-
-        // Edit form (GET)
-        app.get("/q/{id}/edit", ctx -> {
-            Post p = findPostOr404(ctx);
-            var me = SessionStore.currentUser(ctx);
-            if (me == null || !p.getOwnerUid().equals(me.getId())) {
-                ctx.status(403).result("Only the author can edit this question.");
-                return;
-            }
-            // Reuse ask.jte or make a small edit.jte. If you keep ask.jte, pass flags/values:
-            ctx.render("ask.jte", Map.of(
-                    "mode", "edit",
-                    "post", p
+            ctx.render("question.jte", Map.of(
+                    "post", p,
+                    "me", SessionStore.currentUser(ctx)
             ));
         });
-        // Edit submit (POST)
+
+        // Add comment (anyone; later you can restrict to Scholars/Admin)
+        app.post("/q/{id}/comment", ctx -> {
+            Post p = findPostOr404(ctx);
+            String body = param(ctx, "body");
+            if (body == null || body.isBlank()) {
+                ctx.status(400).result("Comment required");
+                return;
+            }
+            p.addComment(body);
+            ctx.redirect("/q/" + p.getId());
+        });
+
+        // Edit (GET) – only owner can view edit form (ask.jte in "edit" mode)
+        app.get("/q/{id}/edit", ctx -> {
+            Post p = findPostOr404(ctx);
+            String uid = getOrCreateUid(ctx);
+            if (!uid.equals(POST_OWNER.getOrDefault(p.getId(), ""))) {
+                ctx.status(403).result("Forbidden");
+                return;
+            }
+            ctx.render("ask.jte", Map.of(
+                    "mode", "edit",
+                    "post", p,
+                    "me", SessionStore.currentUser(ctx)
+            ));
+        });
+
+        // Edit (POST) – only owner can save
         app.post("/q/{id}/edit", ctx -> {
             Post p = findPostOr404(ctx);
-            var me = SessionStore.currentUser(ctx);
-            if (me == null || !p.getOwnerUid().equals(me.getId())) {
-                ctx.status(403).result("Only the author can edit this question.");
+            String uid = getOrCreateUid(ctx);
+            if (!uid.equals(POST_OWNER.getOrDefault(p.getId(), ""))) {
+                ctx.status(403).result("Forbidden");
                 return;
             }
             String title = param(ctx, "title");
@@ -101,120 +124,94 @@ public class Main {
                 ctx.status(400).result("Title required");
                 return;
             }
-            // Replace the post in-place (immutable Post pattern)
-            int idx = p.getId();
-            POSTS.set(idx, new Post(idx, p.getOwnerUid(), title, body));
-            ctx.redirect("/q/" + idx);
+            p.setTitle(title);
+            p.setBody(body == null ? "" : body);
+            ctx.redirect("/q/" + p.getId());
         });
 
-        // --- Comment (requires SCHOLAR or ADMIN) ---
-        app.post("/q/{id}/comment", ctx -> {
-            Post p = findPostOr404(ctx);
-            String body = param(ctx, "body");
-            if (body == null || body.isBlank()) {
-                ctx.status(400).result("Comment required");
-                return;
-            }
-            User me = SessionStore.currentUser(ctx);
-            if (me.getRole() == Role.USER) {
-                ctx.status(403).result("Only verified scholars or admins may comment");
-                return;
-            }
-            p.addComment(body);
-            ctx.redirect("/q/" + p.getId());
-        }, Role.SCHOLAR, Role.ADMIN);
-
-        // --- Upvote ---
+        // Upvote (stay on feed)
         app.post("/q/{id}/upvote", ctx -> {
             Post p = findPostOr404(ctx);
-            String uid = getUserId(ctx);
-            int before = getUserVote(uid, p.getId());
+            String uid = getOrCreateUid(ctx);
+            int before = getUserVote(uid, p.getId());   // -1, 0, +1
             if (before != +1) {
                 setUserVote(uid, p.getId(), +1);
-                p.applyVoteDelta(+1 - before);
+                p.applyVoteDelta(+1 - before);          // net delta
             }
             ctx.redirect("/");
         });
 
-        // --- Downvote ---
+        // Downvote (stay on feed)
         app.post("/q/{id}/downvote", ctx -> {
             Post p = findPostOr404(ctx);
-            String uid = getUserId(ctx);
-            int before = getUserVote(uid, p.getId());
+            String uid = getOrCreateUid(ctx);
+            int before = getUserVote(uid, p.getId());   // -1, 0, +1
             if (before != -1) {
                 setUserVote(uid, p.getId(), -1);
-                p.applyVoteDelta(-1 - before);
+                p.applyVoteDelta(-1 - before);          // net delta
             }
             ctx.redirect("/");
         });
 
-        // ===== ACCOUNT MANAGEMENT =====
+        // ---------- Auth: signup / login / logout ----------
 
-        app.get("/signup", ctx -> ctx.render("signup.jte"));
-        app.post("/signup", Main::handleSignup);
+        app.get("/signup", ctx -> ctx.render("signup.jte", Map.of(
+                "me", SessionStore.currentUser(ctx))));
 
-        app.get("/login", ctx -> ctx.render("login.jte"));
-        app.post("/login", Main::handleLogin);
+        app.post("/signup", ctx -> {
+            String email = param(ctx, "email");
+            String name  = param(ctx, "display_name");
+            String pass  = param(ctx, "password");
+            if (email == null || pass == null) { ctx.status(400).result("Missing credentials"); return; }
+
+            try {
+                if (!Db.emailAvailable(email)) { ctx.status(409).result("Email already in use"); return; }
+                Db.insertUser(email, name, pass, Role.USER);
+                var dbUser = Db.findUserByEmail(email);
+                SessionStore.login(ctx, dbUser);
+                ctx.redirect("/");
+            } catch (Exception e) {
+                ctx.status(500).result("Signup failed");
+            }
+        });
+
+
+        app.get("/login", ctx -> ctx.render("login.jte", Map.of(
+                "me", SessionStore.currentUser(ctx))));
+
+        app.post("/login", ctx -> {
+            String email = param(ctx, "email");
+            String pass  = param(ctx, "password");
+            if (email == null || pass == null) { ctx.status(400).result("Missing credentials"); return; }
+
+            try {
+                if (!Db.checkPassword(email, pass)) { ctx.status(401).result("Bad credentials"); return; }
+                var dbUser = Db.findUserByEmail(email);
+                SessionStore.login(ctx, dbUser);
+                ctx.redirect("/");
+            } catch (Exception e) {
+                ctx.status(500).result("Login failed");
+            }
+        });
+
+
 
         app.post("/logout", ctx -> {
-            SessionStore.logout(ctx);
+            SessionStore.logout(ctx);     // keeps uid cookie for ownership/votes
             ctx.redirect("/");
         });
 
-        // ===== VERIFICATION =====
-        app.get("/verify", ctx -> {
-            User me = SessionStore.currentUser(ctx);
-            ctx.render("verify.jte", Map.of("me", me));
-        });
-
-        app.post("/verify/request", ctx -> {
-            User me = SessionStore.currentUser(ctx);
-            String note = param(ctx, "note");
-            try {
-                Db.createVerificationRequest(me.getId(), note);
-                ctx.redirect("/verify");
-            } catch (Exception e) {
-                ctx.status(500).result("Error submitting request");
-            }
-        });
-
-        // ===== ADMIN: Approve verification =====
-        app.get("/admin/verify", ctx -> {
-            requireRole(ctx, Role.ADMIN);
-            try {
-                var pending = Db.listPendingRequests();
-                ctx.render("admin_verify.jte", Map.of("pending", pending, "me", SessionStore.currentUser(ctx)));
-            } catch (Exception e) {
-                ctx.status(500).result("Error loading verification list");
-            }
-        });
-
-        app.post("/admin/verify/{id}/approve", ctx -> {
-            requireRole(ctx, Role.ADMIN);
-            int id = Integer.parseInt(ctx.pathParam("id"));
-            try {
-                Db.approveVerification(id);
-                ctx.redirect("/admin/verify");
-            } catch (Exception e) {
-                ctx.status(500).result("Error approving");
-            }
-        });
-
-        app.post("/admin/verify/{id}/reject", ctx -> {
-            requireRole(ctx, Role.ADMIN);
-            int id = Integer.parseInt(ctx.pathParam("id"));
-            try {
-                Db.rejectVerification(id);
-                ctx.redirect("/admin/verify");
-            } catch (Exception e) {
-                ctx.status(500).result("Error rejecting");
-            }
+        // Optional: admin promotes a known session uid to SCHOLAR (temporary demo)
+        app.post("/admin/verify/{uid}", ctx -> {
+            String targetUid = ctx.pathParam("uid");
+            SessionStore.promoteToScholar(targetUid);
+            ctx.result("OK");
         });
 
         app.start(7001);
     }
 
-    // ===== Helper methods =====
+    // ---------------- Helpers ----------------
 
     private static String param(Context ctx, String name) {
         String v = ctx.formParam(name);
@@ -230,65 +227,26 @@ public class Main {
         return POSTS.get(id);
     }
 
-    private static String getUserId(Context ctx) {
+    /** Stable, anonymous per-browser id used for ownership and rate-limiting. */
+    private static String getOrCreateUid(Context ctx) {
         String uid = ctx.cookie("uid");
-        if (uid == null) {
+        if (uid == null || uid.isBlank()) {
             uid = UUID.randomUUID().toString();
+            // simple cookie set (Javalin v6)
             ctx.cookie("uid", uid);
         }
         return uid;
     }
 
     private static int getUserVote(String uid, int postId) {
-        return VOTES_BY_USER.getOrDefault(uid, Map.of()).getOrDefault(postId, 0);
+        return VOTES_BY_USER
+                .getOrDefault(uid, Map.of())
+                .getOrDefault(postId, 0);
     }
 
     private static void setUserVote(String uid, int postId, int value) {
-        VOTES_BY_USER.computeIfAbsent(uid, k -> new java.util.concurrent.ConcurrentHashMap<>()).put(postId, value);
-    }
-
-    private static void handleSignup(Context ctx) {
-        String email = param(ctx, "email");
-        String display = param(ctx, "display");
-        String password = param(ctx, "password");
-        if (email == null || password == null) {
-            ctx.status(400).result("Missing email or password");
-            return;
-        }
-        try {
-            if (!Db.emailAvailable(email)) {
-                ctx.status(400).result("Email already in use");
-                return;
-            }
-            User u = Db.createUser(email, display, password);
-            SessionStore.login(ctx, u);
-            ctx.redirect("/");
-        } catch (Exception e) {
-            ctx.status(500).result("Signup failed");
-        }
-    }
-
-    private static void handleLogin(Context ctx) {
-        String email = param(ctx, "email");
-        String password = param(ctx, "password");
-        try {
-            if (!Db.checkPassword(email, password)) {
-                ctx.status(401).result("Invalid credentials");
-                return;
-            }
-            User u = Db.findUserByEmail(email).orElseThrow();
-            SessionStore.login(ctx, u);
-            ctx.redirect("/");
-        } catch (Exception e) {
-            ctx.status(500).result("Login failed");
-        }
-    }
-
-    private static void requireRole(Context ctx, Role minRole) {
-        User u = SessionStore.currentUser(ctx);
-        if (u == null || u.getRole().ordinal() < minRole.ordinal()) {
-            ctx.status(403).result("Forbidden");
-            throw new IllegalStateException("Forbidden");
-        }
+        VOTES_BY_USER
+                .computeIfAbsent(uid, k -> new ConcurrentHashMap<>())
+                .put(postId, value);
     }
 }

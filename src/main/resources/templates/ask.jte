@@ -1,11 +1,15 @@
-@param app.User me
+@import app.User
+@import app.Post
+@param User me
+@param String mode = "create"
+@param Post post = null
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ask a Question - Amaanah</title>
+  <title>${mode.equals("edit") ? "Edit Question" : "Ask a Question"} - Amaanah</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -13,37 +17,27 @@
 
   <main class="form-container">
     <div class="form-card">
-      <h1 class="form-title">Ask a Question</h1>
-      <p style="color: #7c7c7c; font-size: 14px; margin-bottom: 20px;">
-        Your question will be answered by verified scholars in the community.
-      </p>
-
       <h1 class="form-title">
-        ${mode == "edit" ? "Edit your question" : "Ask anonymously"}
+        ${mode.equals("edit") ? "Edit Your Question" : "Ask a Question"}
       </h1>
 
-      <p style="color: #7c7c7c; font-size: 14px; margin-bottom: 20px;">
+      <p style="color: #9a8b6f; font-size: 14px; margin-bottom: 20px;">
         Your question will be answered by verified scholars in the community.
       </p>
 
-      <form method="post" action="${mode == "edit" ? ("/q/" + post.getId() + "/edit") : "/ask"}">
-        <input
-          type="text"
-          name="title"
-          value="${mode == "edit" ? post.getTitle() : ""}"
-          placeholder="Title"
-          required
-          class="form-input"
-        />
-        <textarea
-          name="body"
-          placeholder="Details…"
-          class="form-input"
-        >${mode == "edit" ? post.getBody() : ""}</textarea>
-        <button type="submit" class="btn">
-          ${mode == "edit" ? "Save changes" : "Post question"}
-        </button>
-      </form>
+      <form method="post" action="${mode.equals("edit") ? ("/q/" + post.getId() + "/edit") : "/ask"}">
+        <div class="form-group">
+          <label class="form-label" for="title">Title *</label>
+          <input
+            class="form-input"
+            type="text"
+            id="title"
+            name="title"
+            value="${mode.equals("edit") && post != null ? post.getTitle() : ""}"
+            placeholder="What's your question?"
+            required
+          />
+        </div>
 
         <div class="form-group">
           <label class="form-label" for="body">Details (optional)</label>
@@ -53,10 +47,12 @@
             name="body"
             rows="8"
             placeholder="Provide additional context or details about your question..."
-          ></textarea>
+          >${mode.equals("edit") && post != null ? post.getBody() : ""}</textarea>
         </div>
 
-        <button class="form-submit" type="submit">Post Question</button>
+        <button class="form-submit" type="submit">
+          ${mode.equals("edit") ? "Save Changes" : "Post Question"}
+        </button>
       </form>
     </div>
   </main>
