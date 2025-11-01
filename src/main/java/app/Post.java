@@ -10,15 +10,17 @@ public class Post {
     private final int id;
     private final String title;
     private final String body;
+    private final String ownerUid;
     private final Instant createdAt = Instant.now();
     private final AtomicInteger score = new AtomicInteger(0);
 
     // simple in-memory comments
     private final List<Comment> comments = new CopyOnWriteArrayList<>();
 
-    public Post(int id, String title, String body) {
+    public Post(int id, String ownerUid, String title, String body) {
         this.id = id;
         this.title = title;
+        this.ownerUid = ownerUid;
         this.body  = body == null ? "" : body;
     }
 
@@ -39,6 +41,7 @@ public class Post {
     public int getId() { return id; }
     public String getTitle() { return title; }
     public String getBody() { return body; }
+    public String getOwnerUid() { return ownerUid; }
     public String getSnippet() {
         if (body.isEmpty()) return "";
         int end = Math.min(240, body.length());

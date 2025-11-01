@@ -454,3 +454,23 @@ a:hover { text-decoration: underline; }
   background: #8b4513;
   color: #fff;
 }
+
+.post-actions {
+  text-align: right;
+  margin-bottom: 10px;
+}
+
+.edit-btn {
+  background-color: #f3f3f3;
+  color: #333;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.9em;
+  text-decoration: none;
+  transition: background 0.2s ease;
+}
+
+.edit-btn:hover {
+  background-color: #e5e5e5;
+}

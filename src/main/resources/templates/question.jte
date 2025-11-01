@@ -27,6 +27,12 @@
           </form>
         </div>
 
+          @if(me != null && post.getOwnerUid() == me.getId())
+            <div class="post-actions">
+              <a class="btn edit-btn" href="/q/${post.getId()}/edit" title="Edit your question">Edit</a>
+            </div>
+          @end
+
         <div class="post-body">
           <h1 class="post-heading">${post.getTitle()}</h1>
 

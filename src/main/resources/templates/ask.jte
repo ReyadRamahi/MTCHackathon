@@ -18,18 +18,32 @@
         Your question will be answered by verified scholars in the community.
       </p>
 
-      <form method="post" action="/ask">
-        <div class="form-group">
-          <label class="form-label" for="title">Title *</label>
-          <input
-            class="form-input"
-            type="text"
-            id="title"
-            name="title"
-            placeholder="What's your question?"
-            required
-          />
-        </div>
+      <h1 class="form-title">
+        ${mode == "edit" ? "Edit your question" : "Ask anonymously"}
+      </h1>
+
+      <p style="color: #7c7c7c; font-size: 14px; margin-bottom: 20px;">
+        Your question will be answered by verified scholars in the community.
+      </p>
+
+      <form method="post" action="${mode == "edit" ? ("/q/" + post.getId() + "/edit") : "/ask"}">
+        <input
+          type="text"
+          name="title"
+          value="${mode == "edit" ? post.getTitle() : ""}"
+          placeholder="Title"
+          required
+          class="form-input"
+        />
+        <textarea
+          name="body"
+          placeholder="Details…"
+          class="form-input"
+        >${mode == "edit" ? post.getBody() : ""}</textarea>
+        <button type="submit" class="btn">
+          ${mode == "edit" ? "Save changes" : "Post question"}
+        </button>
+      </form>
 
         <div class="form-group">
           <label class="form-label" for="body">Details (optional)</label>

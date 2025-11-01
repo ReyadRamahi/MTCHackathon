@@ -51,20 +51,60 @@ public class Main {
         app.get("/ask", ctx -> ctx.render("ask.jte", Map.of("me", SessionStore.currentUser(ctx))));
         app.post("/ask", ctx -> {
             String title = param(ctx, "title");
-            String body = param(ctx, "body");
+            String body  = param(ctx, "body");
             if (title == null || title.isBlank()) {
                 ctx.status(400).result("Title required");
                 return;
             }
+            var me = SessionStore.currentUser(ctx);   // uses your uid cookie
+            if (me == null) {                         // should not happen if SessionStore ensures a user
+                me = SessionStore.currentUser(ctx);
+            }
             int id = POSTS.size();
-            POSTS.add(new Post(id, title, body == null ? "" : body));
+            POSTS.add(new Post(id, me.getId(), title, body));
             ctx.redirect("/");
         });
+
 
         // --- View question ---
         app.get("/q/{id}", ctx -> {
             Post p = findPostOr404(ctx);
             ctx.render("question.jte", Map.of("post", p, "me", SessionStore.currentUser(ctx)));
+        });
+
+
+        // Edit form (GET)
+        app.get("/q/{id}/edit", ctx -> {
+            Post p = findPostOr404(ctx);
+            var me = SessionStore.currentUser(ctx);
+            if (me == null || !p.getOwnerUid().equals(me.getId())) {
+                ctx.status(403).result("Only the author can edit this question.");
+                return;
+            }
+            // Reuse ask.jte or make a small edit.jte. If you keep ask.jte, pass flags/values:
+            ctx.render("ask.jte", Map.of(
+                    "mode", "edit",
+                    "post", p
+            ));
+        });
+        // Edit submit (POST)
+        app.post("/q/{id}/edit", ctx -> {
+            Post p = findPostOr404(ctx);
+            var me = SessionStore.currentUser(ctx);
+            if (me == null || !p.getOwnerUid().equals(me.getId())) {
+                ctx.status(403).result("Only the author can edit this question.");
+                return;
+            }
+            String title = param(ctx, "title");
+            String body  = param(ctx, "body");
+            if (title == null || title.isBlank()) {
+                ctx.status(400).result("Title required");
+                return;
+            }
+            // Replace the post in-place (immutable Post pattern)
+            int idx = p.getId();
+            POSTS.set(idx, new Post(idx, p.getOwnerUid(), title, body));
+            ctx.redirect("/q/" + idx);
         });
 
         // --- Comment (requires SCHOLAR or ADMIN) ---
