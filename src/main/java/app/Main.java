@@ -51,11 +51,10 @@ public class Main {
 
             // serve local "uploads" directory at /uploads
             cfg.staticFiles.add(s -> {
-                s.hostedPath = "/uploads";                           // URL prefix
-                s.directory  = UPLOAD_DIR.toString();                 // local folder
-                s.precompress = false;
+                s.hostedPath = "/uploads";
+                s.directory  = UPLOAD_DIR.toAbsolutePath().toString();
                 s.location   = io.javalin.http.staticfiles.Location.EXTERNAL;
-                // caching header is optional; mirrors what you had
+                s.precompress = false;
                 s.headers.put("Cache-Control", "public, max-age=3600");
             });
         });
@@ -231,30 +230,28 @@ public class Main {
         // Admin: review queue
         app.get("/admin/verify", ctx -> {
             var me   = SessionStore.currentUser(ctx);
-            var reqs = Db.listPendingRequests();
+            var reqs = Db.listPendingRequests(); // returns List<Map<String,Object>>
             if (reqs == null) reqs = java.util.Collections.emptyList();
-            ctx.render("admin_verify.jte", model(
-                    "me",   me,
-                    "reqs", reqs
-            ));
+            ctx.render("admin_verify.jte", java.util.Map.of("me", me, "reqs", reqs));
         }, Role.ADMIN);
 
         // Admin: approve
         app.post("/admin/verify/approve/{id}", ctx -> {
             int requestId = Integer.parseInt(ctx.pathParam("id"));
-            String reviewerUid = getOrCreateUid(ctx); // your stable browser uid
-            Db.approveVerification(requestId, reviewerUid);
+            String note   = ctx.formParam("decisionNote");
+            if (note == null || note.isBlank()) note = "Approved by admin";
+            Db.approveRequest(requestId, note);
             ctx.redirect("/admin/verify");
         }, Role.ADMIN);
 
-        // Admin: reject
+// Admin: reject
         app.post("/admin/verify/reject/{id}", ctx -> {
             int requestId = Integer.parseInt(ctx.pathParam("id"));
-            String reviewerUid = getOrCreateUid(ctx);
-            Db.rejectVerification(requestId, reviewerUid);
+            String note   = ctx.formParam("decisionNote");
+            if (note == null || note.isBlank()) note = "Rejected by admin";
+            Db.rejectRequest(requestId, note);
             ctx.redirect("/admin/verify");
         }, Role.ADMIN);
-
         // ---------- Auth: signup / login / logout ----------
 
         app.get("/signup", ctx ->

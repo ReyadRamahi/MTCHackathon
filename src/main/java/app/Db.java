@@ -26,19 +26,17 @@ public class Db {
                 )
             """);
             st.executeUpdate("""
-            CREATE TABLE IF NOT EXISTS verification_requests(
+            CREATE TABLE verification_requests(
               id            INTEGER PRIMARY KEY AUTOINCREMENT,
-              uid           TEXT    NOT NULL,              -- session/browser uid (owner)
+              uid           TEXT    NOT NULL,              -- browser/session uid (owner)
               email         TEXT,                          -- optional contact
               note          TEXT,                          -- user-provided details
-              file_path     TEXT,                          -- server-side stored path (NOT web-accessible)
-              file_name     TEXT,                          -- original filename (for admin display)
-              file_sha256   TEXT,                          -- integrity
+              file_path     TEXT,                          -- server-side stored path
+              file_name     TEXT,                          -- original filename
+              file_sha256   TEXT,                          -- integrity check
               status        TEXT    NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
-              decision_note TEXT,                          -- admin note
-              created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              decided_at    TEXT
-            );
+              created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+              decided_at    TEXT                           -- when approved/rejected
             """);
         }
     }
@@ -133,39 +131,35 @@ public class Db {
     }
 
     public static void approveVerification(int requestId, String reviewerUid) throws SQLException {
-        // 1) fetch uid
+        // 1) Get the uid from the verification request
         String uid;
         try (var conn = get();
              var ps = conn.prepareStatement("SELECT uid FROM verification_requests WHERE id=? AND status='pending'")) {
             ps.setInt(1, requestId);
             try (var rs = ps.executeQuery()) {
-                if (!rs.next()) return;
+                if (!rs.next()) return; // already processed or not found
                 uid = rs.getString("uid");
             }
         }
-        // 2) promote user and mark reviewed
-        try (var conn = get()) {
-            try (var ps1 = conn.prepareStatement("UPDATE users SET role='SCHOLAR' WHERE id=?")) {
-                ps1.setInt(1, Integer.parseInt(uid)); // if your uid is not numeric, adapt this
-                ps1.executeUpdate();
-            } catch (NumberFormatException ignore) {
-                // If uid is a random UUID not equal to users.id, adapt to your own mapping.
-            }
-            try (var ps2 = conn.prepareStatement(
-                    "UPDATE verification_requests SET status='approved', reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?")) {
-                ps2.setString(1, reviewerUid);
-                ps2.setInt(2, requestId);
-                ps2.executeUpdate();
-            }
+
+        // 2) Mark the request as approved
+        try (var conn = get();
+             var ps = conn.prepareStatement(
+                     "UPDATE verification_requests SET status='approved', decided_at=CURRENT_TIMESTAMP WHERE id=?")) {
+            ps.setInt(1, requestId);
+            ps.executeUpdate();
         }
+
+        // 3) IMPORTANT: Promote the user in SessionStore (in-memory)
+        //    Since your users are identified by browser UID, not DB id
+        SessionStore.promoteToScholar(uid);
     }
 
     public static void rejectVerification(int requestId, String reviewerUid) throws SQLException {
         try (var conn = get();
              var ps = conn.prepareStatement(
-                     "UPDATE verification_requests SET status='rejected', reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'")) {
-            ps.setString(1, reviewerUid);
-            ps.setInt(2, requestId);
+                     "UPDATE verification_requests SET status='rejected', decided_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'")) {
+            ps.setInt(1, requestId);
             ps.executeUpdate();
         }
     }
