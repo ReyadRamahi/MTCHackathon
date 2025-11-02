@@ -42,7 +42,7 @@
             @endif
             @if(me != null && me.getRole() == app.Role.ADMIN)
               <form method="post" action="/admin/posts/${post.getId()}/delete" style="display:inline">
-                <button class="btn btn-danger btn-xs">Delete Post</button>
+                <button class="btn btn-danger" type="submit">Delete</button>
               </form>
             @endif
           </div>

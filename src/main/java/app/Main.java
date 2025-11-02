@@ -194,7 +194,7 @@ public class Main {
         app.post("/verify", ctx -> {
             var me = SessionStore.currentUser(ctx);
 
-            var upload = ctx.uploadedFile("doc");
+            var upload = ctx.uploadedFile("file");
             if (upload == null) {
                 ctx.status(400).result("File required");
                 return;
@@ -233,6 +233,84 @@ public class Main {
             var reqs = Db.listPendingRequests(); // returns List<Map<String,Object>>
             if (reqs == null) reqs = java.util.Collections.emptyList();
             ctx.render("admin_verify.jte", java.util.Map.of("me", me, "reqs", reqs));
+        }, Role.ADMIN);
+
+        // --- Admin: serve uploaded document securely (inline preview) ---
+        app.get("/admin/verify/file/{id}", ctx -> {
+            // auth: only admins
+            var me = SessionStore.currentUser(ctx);
+            if (me == null || me.getRole() != Role.ADMIN) {
+                ctx.status(403).result("Forbidden");
+                return;
+            }
+
+            // parse id
+            int id;
+            try {
+                id = Integer.parseInt(ctx.pathParam("id"));
+            } catch (NumberFormatException nfe) {
+                ctx.status(400).result("Bad id");
+                return;
+            }
+
+            // look up row (id -> file_path, file_name) from your table
+            String filePath = null;
+            String fileName = null;
+            try (var conn = Db.get();
+                 var ps = conn.prepareStatement(
+                         "SELECT file_path, file_name FROM verification_requests WHERE id=?"
+                 )) {
+                ps.setInt(1, id);
+                try (var rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        filePath = rs.getString("file_path");  // absolute or relative path you saved earlier
+                        fileName = rs.getString("file_name");
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                ctx.status(500).result("DB error");
+                return;
+            }
+
+            if (filePath == null) {
+                ctx.status(404).result("Not found");
+                return;
+            }
+
+            var path = java.nio.file.Paths.get(filePath);
+            if (!java.nio.file.Files.exists(path)) {
+                ctx.status(404).result("Not found");
+                return;
+            }
+
+            // content type from filename (fallback to octet-stream)
+            String ct = null;
+            try {
+                ct = java.nio.file.Files.probeContentType(path);
+            } catch (Exception ignored) {}
+            if (ct == null) {
+                var lower = fileName == null ? "" : fileName.toLowerCase();
+                if (lower.endsWith(".pdf")) ct = "application/pdf";
+                else if (lower.endsWith(".png")) ct = "image/png";
+                else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) ct = "image/jpeg";
+                else if (lower.endsWith(".webp")) ct = "image/webp";
+                else if (lower.endsWith(".gif")) ct = "image/gif";
+                else ct = "application/octet-stream";
+            }
+
+            // serve inline so <iframe> / <img> render
+            ctx.header("Content-Type", ct);
+            if (fileName != null && !fileName.isBlank()) {
+                ctx.header("Content-Disposition", "inline; filename=\"" + fileName.replace("\"","") + "\"");
+            }
+
+            try {
+                ctx.result(java.nio.file.Files.newInputStream(path));
+            } catch (Exception e) {
+                e.printStackTrace();
+                ctx.status(500).result("Read error");
+            }
         }, Role.ADMIN);
 
         // Admin: approve
@@ -311,6 +389,7 @@ public class Main {
             SessionStore.promoteToScholar(targetUid);
             ctx.result("OK");
         });
+        
 
         app.start(7001);
     }
@@ -366,4 +445,18 @@ public class Main {
             return "";
         }
     }
+    /** Hide posts that hit -5 or worse; unhide if score rises above -5. */
+    private static final int AUTO_DELETE_THRESHOLD = -5;
+
+    private static void maybeDeleteOnThreshold(Post p) {
+        if (p.getScore() <= AUTO_DELETE_THRESHOLD) {
+            try {
+                Db.deletePost(p.getId());  // assumes this already exists
+            } catch (Exception e) {
+                // Don't block the vote flow if deletion hiccups
+                e.printStackTrace();
+            }
+        }
+    }
+
 }

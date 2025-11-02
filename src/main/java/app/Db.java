@@ -14,30 +14,57 @@ public class Db {
 
     // call once on boot
     public static void init() throws SQLException {
-        try (var conn = get(); var st = conn.createStatement()) {
-            st.executeUpdate("""
-                CREATE TABLE IF NOT EXISTS users(
-                  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                  email         TEXT    NOT NULL UNIQUE,
-                  display_name  TEXT    NOT NULL,
-                  password_hash TEXT    NOT NULL,
-                  role          TEXT    NOT NULL,
-                  created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        try (var conn = get()) {
+            try (var st = conn.createStatement()) {
+                st.execute("PRAGMA foreign_keys = ON");
+
+                st.execute("""
+                CREATE TABLE IF NOT EXISTS posts (
+                  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                  title       TEXT,
+                  body        TEXT NOT NULL,
+                  author_uid  TEXT NOT NULL,
+                  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  hidden      INTEGER NOT NULL DEFAULT 0
                 )
             """);
-            st.executeUpdate("""
-            CREATE TABLE verification_requests(
-              id            INTEGER PRIMARY KEY AUTOINCREMENT,
-              uid           TEXT    NOT NULL,              -- browser/session uid (owner)
-              email         TEXT,                          -- optional contact
-              note          TEXT,                          -- user-provided details
-              file_path     TEXT,                          -- server-side stored path
-              file_name     TEXT,                          -- original filename
-              file_sha256   TEXT,                          -- integrity check
-              status        TEXT    NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
-              created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-              decided_at    TEXT                           -- when approved/rejected
+
+                st.execute("""
+                CREATE TABLE IF NOT EXISTS comments (
+                  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                  post_id     INTEGER NOT NULL,
+                  body        TEXT NOT NULL,
+                  author_uid  TEXT NOT NULL,
+                  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
+                )
             """);
+
+                st.execute("""
+                CREATE TABLE IF NOT EXISTS votes (
+                  post_id   INTEGER NOT NULL,
+                  uid       TEXT NOT NULL,
+                  value     INTEGER NOT NULL CHECK (value IN (-1,1)),
+                  PRIMARY KEY (post_id, uid),
+                  FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
+                )
+            """);
+
+                st.execute("""
+                CREATE TABLE IF NOT EXISTS verification_requests (
+                  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                  uid           TEXT NOT NULL,
+                  email         TEXT,
+                  note          TEXT,
+                  file_path     TEXT NOT NULL,   -- full path on disk
+                  file_name     TEXT NOT NULL,   -- original filename
+                  status        TEXT NOT NULL DEFAULT 'pending', -- pending/approved/rejected
+                  decision_note TEXT,
+                  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  decided_at    TEXT
+                )
+            """);
+            }
         }
     }
 
@@ -74,6 +101,40 @@ public class Db {
                         rs.getString("display_name"),
                         Role.valueOf(rs.getString("role"))
                 );
+            }
+        }
+    }
+
+    public static void deletePost(int id) throws SQLException {
+        try (var conn = get();
+             var ps = conn.prepareStatement("DELETE FROM posts WHERE id=?")) {
+            ps.setInt(1, id);
+            int n = ps.executeUpdate(); // n should be 1
+        }
+    }
+    public static void deletePostCascade(int postId) throws SQLException {
+        try (var conn = get()) {
+            conn.setAutoCommit(false);
+
+            // If you use SQLite, make sure FKs are on in your Db.init():
+            // try (var st = conn.createStatement()) { st.execute("PRAGMA foreign_keys = ON"); }
+
+            try (var ps1 = conn.prepareStatement("DELETE FROM comments WHERE post_id=?");
+                 var ps2 = conn.prepareStatement("DELETE FROM votes    WHERE post_id=?");
+                 var ps3 = conn.prepareStatement("DELETE FROM posts    WHERE id=?")) {
+
+                ps1.setInt(1, postId); ps1.executeUpdate();
+                ps2.setInt(1, postId); ps2.executeUpdate();
+                ps3.setInt(1, postId);
+                int n = ps3.executeUpdate();  // should be 1
+
+                conn.commit();
+                if (n != 1) throw new SQLException("No post row deleted for id=" + postId);
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
             }
         }
     }
@@ -198,6 +259,14 @@ public class Db {
                 "UPDATE verification_requests SET status='rejected', decision_note=?, decided_at=CURRENT_TIMESTAMP WHERE id=?"
         )) {
             ps.setString(1, decisionNote);
+            ps.setInt(2, id);
+            ps.executeUpdate();
+        }
+    }
+    public static void markPostHidden(int id, boolean hidden) throws SQLException {
+        try (var conn = get();
+             var ps = conn.prepareStatement("UPDATE posts SET hidden=? WHERE id=?")) {
+            ps.setInt(1, hidden ? 1 : 0);
             ps.setInt(2, id);
             ps.executeUpdate();
         }

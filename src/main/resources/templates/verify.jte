@@ -37,16 +37,20 @@
           </label>
 
           <!-- Drag & Drop Upload -->
-          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload diploma or transcript">
-            <input id="file" name="file" type="file" accept=".pdf,image/*" hidden />
-            <div class="dropzone-inner">
-              <svg viewBox="0 0 24 24" aria-hidden="true" class="dz-icon">
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload diploma or transcript"
+               style="position: relative;">
+            <!-- Native file input covers the whole dropzone for click & drag-and-drop -->
+            <input id="file" name="file" type="file" accept=".pdf,image/*" required
+                   style="position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer;" />
+
+            <div class="dropzone-inner" aria-hidden="true">
+              <svg viewBox="0 0 24 24" class="dz-icon" aria-hidden="true">
                 <path d="M14,14H10V3H14M19,13V17H5V13H3V17A2,2 0 0,0 5,19H19A2,2 0 0,0 21,17V13" />
                 <path d="M12,7L8,11H11V21H13V11H16L12,7Z" />
               </svg>
               <div class="dz-text">
                 <strong>Drag & drop</strong> your file here, or
-                <button type="button" class="link-btn" id="pickBtn">browse</button>
+                <label for="file" class="link-btn" style="cursor:pointer;">browse</label>
                 <div class="dz-note">PDF or image only. Max size 8 MB.</div>
               </div>
             </div>
@@ -75,58 +79,43 @@
   </main>
 
   <script>
-    (function () {
-      const drop = document.getElementById('dropzone');
-      const fileInput = document.getElementById('file');
-      const pickBtn = document.getElementById('pickBtn');
-      const fileMeta = document.getElementById('fileMeta');
-      const fileName = document.getElementById('fileName');
-      const fileSize = document.getElementById('fileSize');
-      const fileError = document.getElementById('fileError');
-      const submitBtn = document.getElementById('submitBtn');
+  (function () {
+    const fileInput = document.getElementById('file');
+    const fileMeta  = document.getElementById('fileMeta');
+    const fileName  = document.getElementById('fileName');
+    const fileSize  = document.getElementById('fileSize');
+    const fileError = document.getElementById('fileError');
+    const submitBtn = document.getElementById('submitBtn');
 
-      const MAX = 8 * 1024 * 1024; // 8 MB
-      const ok = (f) => ['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(f.type) || f.name.toLowerCase().endsWith('.pdf');
+    const MAX = 8 * 1024 * 1024; // 8 MB
+    const ok = (f) => ['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/gif']
+                      .includes(f.type) || f.name.toLowerCase().endsWith('.pdf');
 
-      function showMeta(f) {
-        fileMeta.hidden = false;
-        fileName.textContent = f.name;
-        fileSize.textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
-      }
-      function error(msg) {
-        fileError.hidden = false;
-        fileError.textContent = msg;
-        submitBtn.disabled = true;
-      }
-      function clearError() {
-        fileError.hidden = true;
-        fileError.textContent = '';
-      }
-      function handleFile(f) {
-        clearError();
-        if (!f) return;
-        if (!ok(f)) return error('Please upload a PDF or image.');
-        if (f.size > MAX) return error('File too large (max 8 MB).');
-        showMeta(f);
-        submitBtn.disabled = false;
-      }
+    function showMeta(f) {
+      fileMeta.hidden = false;
+      fileName.textContent = f.name;
+      fileSize.textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
+    }
+    function error(msg) {
+      fileError.hidden = false;
+      fileError.textContent = msg;
+      submitBtn.disabled = true;
+    }
+    function clearError() {
+      fileError.hidden = true;
+      fileError.textContent = '';
+    }
 
-      pickBtn.addEventListener('click', () => fileInput.click());
-      fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
-
-      ['dragenter','dragover'].forEach(ev =>
-        drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('is-over'); })
-      );
-      ['dragleave','drop'].forEach(ev =>
-        drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('is-over'); })
-      );
-      drop.addEventListener('drop', (e) => {
-        const f = e.dataTransfer.files && e.dataTransfer.files[0];
-        if (f) { fileInput.files = e.dataTransfer.files; handleFile(f); }
-      });
-      drop.addEventListener('click', () => fileInput.click());
-      drop.addEventListener('keypress', (e) => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
-    })();
+    fileInput.addEventListener('change', () => {
+      clearError();
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) { submitBtn.disabled = true; return; }
+      if (!ok(f)) { error('Please upload a PDF or image.'); return; }
+      if (f.size > MAX) { error('File too large (max 8 MB).'); return; }
+      showMeta(f);
+      submitBtn.disabled = false;
+    });
+  })();
   </script>
 </body>
 </html>
