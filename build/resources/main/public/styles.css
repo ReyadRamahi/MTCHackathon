@@ -855,3 +855,39 @@ a:hover { text-decoration: underline; }
 .btn-ghost   { background:#f5efe3; color:#3a3a2f; border-color:#e7e2d9; }
 .btn-danger  { background:#f7e7e5; color:#9d2d28; border-color:#efdfdc; }
 .btn:hover   { filter:brightness(0.98); }
+
+/* --- Admin verify layout --- */
+.admin-body { background:#f6f2e9; }
+.admin-header { background:#f3efe7; border-bottom:1px solid #e6e0d6; }
+.admin-header__inner { max-width:1100px; margin:0 auto; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
+.brand { font-weight:800; color:#2d623f; text-decoration:none; font-size:20px; }
+.admin-header__who { color:#6f6a62; }
+
+.admin-wrap { max-width:1100px; margin:24px auto 56px; padding:0 16px; }
+.admin-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+
+.title { font-weight:700; color:#2f2a22; }
+.muted { color:#7f7769; font-size:13px; }
+.tip { margin-top:8px; }
+
+.card { background:#fff; border:1px solid #e6e0d6; border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,.03); }
+.card--center { padding:40px; text-align:center; }
+
+.review { display:grid; grid-template-columns: 1.3fr 1fr; gap:16px; padding:16px; }
+.doc { background:#faf8f2; border:1px dashed #d8d1c6; border-radius:10px; display:flex; align-items:center; justify-content:center; min-height:540px; }
+.doc-frame { width:100%; height:78vh; border:0; border-radius:10px; background:#fff; }
+.doc-img { max-width:100%; max-height:78vh; border-radius:10px; }
+
+.meta { padding:12px; display:grid; gap:10px; }
+.kv { display:flex; gap:8px; align-items:baseline; }
+.kv .k { font-weight:600; min-width:84px; color:#3d7a52; }
+.v--mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.controls { display:flex; gap:10px; padding:14px 0 0; border-top:1px solid #eee8dd; justify-content:flex-end; }
+
+.btn { cursor:pointer; border-radius:8px; padding:10px 14px; font-weight:600; border:1px solid transparent; }
+.btn-primary { background:#3d7a52; color:#fff; }
+.btn-ghost { background:#f4efe6; color:#3d7a52; border-color:#d8d1c6; }
+.btn-danger { background:#fee9e6; color:#b33a2f; border-color:#f5c6c0; }
+
+.pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#f4efe6; color:#7a6f5e; font-size:12px; }

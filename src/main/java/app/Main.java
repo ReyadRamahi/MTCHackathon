@@ -4,24 +4,25 @@ import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
 import io.javalin.rendering.template.JavalinJte;
-
 import gg.jte.ContentType;
 import gg.jte.TemplateEngine;
 import gg.jte.resolve.DirectoryCodeResolver;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static io.javalin.rendering.template.TemplateUtil.model;
 
 public class Main {
 
     // -------- In-memory “DB-ish” storage --------
     private static final List<Post> POSTS = new CopyOnWriteArrayList<>();
-    //documents
-    private static final Path UPLOAD_DIR = Path.of("uploads", "secure").toAbsolutePath();
 
     // user cookie uid -> (postId -> -1/0/+1) to rate-limit per user
     private static final Map<String, Map<Integer, Integer>> VOTES_BY_USER = new ConcurrentHashMap<>();
@@ -29,37 +30,56 @@ public class Main {
     // postId -> ownerUid (so only the author can edit)
     private static final Map<Integer, String> POST_OWNER = new ConcurrentHashMap<>();
 
-    public static void main(String[] args) {
+    // uploads directory
+    private static final Path UPLOAD_DIR = Path.of("uploads").toAbsolutePath();
+
+    public static void main(String[] args) throws Exception {
+
+        // ----- Ensure uploads dir exists -----
+        Files.createDirectories(UPLOAD_DIR);
 
         // ----- JTE engine -----
         Path templatesDir = Path.of("src/main/resources/templates").toAbsolutePath();
         TemplateEngine engine = TemplateEngine.create(new DirectoryCodeResolver(templatesDir), ContentType.Html);
-        // Create private upload folder (not in /public)
-        try {
-            Files.createDirectories(UPLOAD_DIR);
-        } catch (java.io.IOException e) {
-            throw new RuntimeException("Could not create upload directory: " + UPLOAD_DIR, e);
-        }
 
         // ----- Javalin app -----
         Javalin app = Javalin.create((JavalinConfig cfg) -> {
             cfg.fileRenderer(new JavalinJte(engine)); // render *.jte
-            cfg.staticFiles.add("/public");           // /styles.css etc.
+
+            // /public (styles.css, etc.)
+            cfg.staticFiles.add("/public");
+
+            // serve local "uploads" directory at /uploads
+            cfg.staticFiles.add(s -> {
+                s.hostedPath = "/uploads";                           // URL prefix
+                s.directory  = UPLOAD_DIR.toString();                 // local folder
+                s.precompress = false;
+                s.location   = io.javalin.http.staticfiles.Location.EXTERNAL;
+                // caching header is optional; mirrors what you had
+                s.headers.put("Cache-Control", "public, max-age=3600");
+            });
         });
 
+        // DB boot
         try { Db.init(); } catch (Exception e) { e.printStackTrace(); }
 
-        // ===================== ROUTES =====================
+        // ----- Routes -----
 
         // Home (feed)
         app.get("/", ctx -> {
             HomeView vm = new HomeView(POSTS);
-            render(ctx, "home.jte", mapOf("vm", vm));
+            ctx.render("home.jte", model(
+                    "vm", vm,
+                    "me", SessionStore.currentUser(ctx)
+            ));
         });
 
-        // Ask (GET) – new
+        // Ask (GET) – create new
         app.get("/ask", ctx -> {
-            render(ctx, "ask.jte", mapOf("mode", "new"));
+            ctx.render("ask.jte", model(
+                    "mode", "new",
+                    "me", SessionStore.currentUser(ctx)
+            ));
         });
 
         // Ask (POST) – create post, record ownership by cookie uid
@@ -74,16 +94,20 @@ public class Main {
             String ownerUid = getOrCreateUid(ctx);
             POSTS.add(new Post(id, title, body, ownerUid));
             POST_OWNER.put(id, ownerUid);
+
             ctx.redirect("/");
         });
 
-        // View a single post
+        // View single post
         app.get("/q/{id}", ctx -> {
             Post p = findPostOr404(ctx);
-            render(ctx, "question.jte", mapOf("post", p));
+            ctx.render("question.jte", model(
+                    "post", p,
+                    "me", SessionStore.currentUser(ctx)
+            ));
         });
 
-        // Add comment (anyone). If logged out, shows as anon/USER.
+        // Add comment
         app.post("/q/{id}/comment", ctx -> {
             Post p = findPostOr404(ctx);
             String body = param(ctx, "body");
@@ -91,14 +115,16 @@ public class Main {
                 ctx.status(400).result("Comment required");
                 return;
             }
+
             User me = SessionStore.currentUser(ctx);
-            String authorName = (me == null) ? "anon" : me.getPublicName();
-            Role   authorRole = (me == null) ? Role.USER : me.getRole();
+            String authorName = me.getPublicName();
+            Role authorRole = me.getRole();
+
             p.addComment(body, authorName, authorRole);
             ctx.redirect("/q/" + p.getId());
         });
 
-        // Edit (GET) – only owner may see form (ask.jte in "edit" mode)
+        // Edit (GET)
         app.get("/q/{id}/edit", ctx -> {
             Post p = findPostOr404(ctx);
             String uid = getOrCreateUid(ctx);
@@ -106,13 +132,14 @@ public class Main {
                 ctx.status(403).result("Forbidden");
                 return;
             }
-            render(ctx, "ask.jte", mapOf(
+            ctx.render("ask.jte", model(
                     "mode", "edit",
-                    "post", p
+                    "post", p,
+                    "me", SessionStore.currentUser(ctx)
             ));
         });
 
-        // Edit (POST) – only owner may save
+        // Edit (POST)
         app.post("/q/{id}/edit", ctx -> {
             Post p = findPostOr404(ctx);
             String uid = getOrCreateUid(ctx);
@@ -131,7 +158,7 @@ public class Main {
             ctx.redirect("/q/" + p.getId());
         });
 
-        // Upvote (stay on feed)
+        // Upvote
         app.post("/q/{id}/upvote", ctx -> {
             Post p = findPostOr404(ctx);
             String uid = getOrCreateUid(ctx);
@@ -143,7 +170,7 @@ public class Main {
             ctx.redirect("/");
         });
 
-        // Downvote (stay on feed)
+        // Downvote
         app.post("/q/{id}/downvote", ctx -> {
             Post p = findPostOr404(ctx);
             String uid = getOrCreateUid(ctx);
@@ -155,44 +182,45 @@ public class Main {
             ctx.redirect("/");
         });
 
-        // ---------- Verification pages ----------
+        // --- Verification pages ---
 
         // Public: request verification form
-        app.get("/verify", ctx -> {
-            render(ctx, "verify.jte", null);
-        });
+        app.get("/verify", ctx ->
+                ctx.render("verify.jte", model(
+                        "me", SessionStore.currentUser(ctx)
+                ))
+        );
 
-        // Public: submit verification request (stub)
+        // Public: submit verification request (stores file & row)
         app.post("/verify", ctx -> {
-            var me  = SessionStore.currentUser(ctx);
-            if (me == null) { ctx.status(401).result("Please log in first."); return; }
+            var me = SessionStore.currentUser(ctx);
 
-            String uid   = SessionStore.getOrCreateUid(ctx); // add a public helper in SessionStore if needed
-            String email = ctx.formParam("email");           // optional contact
-            String note  = ctx.formParam("details");         // from your form
-
-            var upload = ctx.uploadedFile("diploma");        // <input type="file" name="diploma">
-            if (upload == null) { ctx.status(400).result("Please attach a diploma or transcript."); return; }
-
-            // Basic validations
-            long maxBytes = 8L * 1024 * 1024;
-            if (upload.size() > maxBytes) { ctx.status(413).result("File too large (max 8MB)."); return; }
-            var ct = upload.contentType();
-            if (ct == null || !(ct.startsWith("image/") || ct.equals("application/pdf"))) {
-                ctx.status(415).result("Only PDF or image files allowed.");
+            var upload = ctx.uploadedFile("doc");
+            if (upload == null) {
+                ctx.status(400).result("File required");
                 return;
             }
 
-            // Read bytes & store
-            byte[] bytes = upload.content().readAllBytes();
-            String hash  = sha256(bytes);
-            String safeName = java.util.UUID.randomUUID() + "-" + upload.filename().replaceAll("[^A-Za-z0-9._-]","_");
-            var where = UPLOAD_DIR.resolve(safeName);
-            java.nio.file.Files.write(where, bytes);
+            String contentType = upload.contentType();
+            boolean okType = contentType != null &&
+                    (contentType.equals("application/pdf") ||
+                            contentType.startsWith("image/"));
+            if (!okType || upload.size() > 8 * 1024 * 1024) {
+                ctx.status(415).result("Only PDF or image files <= 8MB allowed.");
+                return;
+            }
 
-            // Record request
+            byte[] bytes = upload.content().readAllBytes();
+            String safeName = java.util.UUID.randomUUID() + "-" +
+                    upload.filename().replaceAll("[^A-Za-z0-9._-]", "-");
+            Path where = UPLOAD_DIR.resolve(safeName);
+            Files.write(where, bytes);
+
+            String email = ctx.formParam("email");
+            String note  = ctx.formParam("note");
+
             try {
-                Db.insertVerificationRequest(uid, email, note, where.toString(), upload.filename(), hash);
+                Db.insertVerificationRequest(me.getId(), email, note, where.toString(), upload.filename(), sha256(bytes));
                 ctx.redirect("/verify?submitted=1");
             } catch (Exception e) {
                 e.printStackTrace();
@@ -201,119 +229,52 @@ public class Main {
         });
 
         // Admin: review queue
-        // Serve uploaded verification file (admin-only)
-        app.get("/admin/verify/file/{name}", ctx -> {
-            var me = SessionStore.currentUser(ctx);
-            if (me == null || me.getRole() != Role.ADMIN) { ctx.status(403).result("Forbidden"); return; }
-
-            String name = ctx.pathParam("name");
-            // basic allowlist: only filenames we created (no '/')
-            if (name.contains("/") || name.contains("..")) { ctx.status(400).result("Bad name"); return; }
-
-            var file = UPLOAD_DIR.resolve(name);
-            if (!java.nio.file.Files.exists(file)) { ctx.status(404).result("Not found"); return; }
-
-            // naive content-type guess
-            String ct = java.nio.file.Files.probeContentType(file);
-            if (ct == null) ct = "application/octet-stream";
-
-            ctx.contentType(ct);
-            ctx.result(java.nio.file.Files.newInputStream(file));
-        });
-
-// Show pending queue
         app.get("/admin/verify", ctx -> {
             var me   = SessionStore.currentUser(ctx);
-            var list = Db.listPendingRequests();       // List<Map<String,Object>>
-
-            Map<String, Object> item = (list == null || list.isEmpty()) ? null : list.get(0);
-
-            String uid   = item == null ? null : (String) item.get("uid");
-            String email = item == null ? null : (String) item.get("email");
-            String note  = item == null ? null : (String) item.get("note");
-            String file  = item == null ? null : (String) item.get("file_name");
-            String when  = item == null ? null : String.valueOf(item.get("created_at"));
-            String url   = (file == null) ? null : "/uploads/" + file;
-            boolean isPdf = file != null && file.toLowerCase().endsWith(".pdf");
-
-            ctx.render("admin_verify.jte", java.util.Map.of(
-                    "me", me,
-                    "reqs", list,
-                    "uid", uid,
-                    "email", email,
-                    "note", note,
-                    "file", file,
-                    "when", when,
-                    "url", url,
-                    "isPdf", isPdf
+            var reqs = Db.listPendingRequests();
+            if (reqs == null) reqs = java.util.Collections.emptyList();
+            ctx.render("admin_verify.jte", model(
+                    "me",   me,
+                    "reqs", reqs
             ));
         }, Role.ADMIN);
 
-// Approve / Reject
-        app.post("/admin/verify/{id}/approve", ctx -> {
-            var me = SessionStore.currentUser(ctx);
-            if (me == null || me.getRole() != Role.ADMIN) { ctx.status(403).result("Forbidden"); return; }
-
-            int id = Integer.parseInt(ctx.pathParam("id"));
-            try { Db.approveVerification(id, me.getId()); }
-            catch (Exception e) { e.printStackTrace(); }
+        // Admin: approve
+        app.post("/admin/verify/approve/{id}", ctx -> {
+            int requestId = Integer.parseInt(ctx.pathParam("id"));
+            String reviewerUid = getOrCreateUid(ctx); // your stable browser uid
+            Db.approveVerification(requestId, reviewerUid);
             ctx.redirect("/admin/verify");
-        });
-        app.post("/admin/verify/{id}/reject", ctx -> {
-            var me = SessionStore.currentUser(ctx);
-            if (me == null || me.getRole() != Role.ADMIN) { ctx.status(403).result("Forbidden"); return; }
+        }, Role.ADMIN);
 
-            int id = Integer.parseInt(ctx.pathParam("id"));
-            try { Db.rejectVerification(id, me.getId()); }
-            catch (Exception e) { e.printStackTrace(); }
+        // Admin: reject
+        app.post("/admin/verify/reject/{id}", ctx -> {
+            int requestId = Integer.parseInt(ctx.pathParam("id"));
+            String reviewerUid = getOrCreateUid(ctx);
+            Db.rejectVerification(requestId, reviewerUid);
             ctx.redirect("/admin/verify");
-        });
-        // admin remove
-        // Admin delete a post
-        app.post("/admin/posts/{id}/delete", ctx -> {
-            var me = SessionStore.currentUser(ctx);
-            if (me == null || me.getRole() != Role.ADMIN) { ctx.status(403).result("Forbidden"); return; }
+        }, Role.ADMIN);
 
-            int id = Integer.parseInt(ctx.pathParam("id"));
-            if (id < 0 || id >= POSTS.size()) { ctx.status(404).result("Not found"); return; }
-
-            POSTS.remove(id);
-            POST_OWNER.remove(id);
-            // Optional: also purge votes for this id
-            VOTES_BY_USER.values().forEach(map -> map.remove(id));
-
-            ctx.redirect("/");
-        });
-
-
-        app.post("/admin/posts/{id}/comments/{idx}/delete", ctx -> {
-            var me = SessionStore.currentUser(ctx);
-            if (me == null || me.getRole() != Role.ADMIN) { ctx.status(403).result("Forbidden"); return; }
-
-            int id  = Integer.parseInt(ctx.pathParam("id"));
-            int idx = Integer.parseInt(ctx.pathParam("idx"));
-
-            if (id < 0 || id >= POSTS.size()) { ctx.status(404).result("Not found"); return; }
-            var p = POSTS.get(id);
-            p.removeCommentAt(idx);
-
-            ctx.redirect("/q/" + id);
-        });
         // ---------- Auth: signup / login / logout ----------
 
-        app.get("/signup", ctx -> render(ctx, "signup.jte", null));
+        app.get("/signup", ctx ->
+                ctx.render("signup.jte", model(
+                        "me", SessionStore.currentUser(ctx)
+                ))
+        );
 
         app.post("/signup", ctx -> {
             String email = param(ctx, "email");
             String name  = param(ctx, "displayName");
             String pass  = param(ctx, "password");
             if (email == null || pass == null) { ctx.status(400).result("Missing credentials"); return; }
+
             if (!Db.emailAvailable(email)) { ctx.status(409).result("Email already in use"); return; }
 
             try {
                 Db.insertUser(email, name, pass, Role.USER);
                 User dbUser = Db.findUserByEmail(email);
-                SessionStore.login(ctx, dbUser); // binds DB identity to this browser's uid
+                SessionStore.login(ctx, dbUser);
                 ctx.redirect("/");
             } catch (Exception e) {
                 e.printStackTrace();
@@ -321,12 +282,17 @@ public class Main {
             }
         });
 
-        app.get("/login", ctx -> render(ctx, "login.jte", null));
+        app.get("/login", ctx ->
+                ctx.render("login.jte", model(
+                        "me", SessionStore.currentUser(ctx)
+                ))
+        );
 
         app.post("/login", ctx -> {
             String email = param(ctx, "email");
             String pass  = param(ctx, "password");
             if (email == null || pass == null) { ctx.status(400).result("Missing credentials"); return; }
+
             try {
                 if (!Db.checkPassword(email, pass)) { ctx.status(401).result("Bad credentials"); return; }
                 var dbUser = Db.findUserByEmail(email);
@@ -338,42 +304,21 @@ public class Main {
         });
 
         app.post("/logout", ctx -> {
-            SessionStore.logout(ctx); // clears “logged-in identity”, keeps anonymous uid cookie
+            SessionStore.logout(ctx);     // keeps uid cookie for ownership/votes
             ctx.redirect("/");
         });
 
-        // Optional: quick demo — promote a known session uid to SCHOLAR
+        // Optional: admin promotes a known session uid to SCHOLAR (temporary demo)
         app.post("/admin/verify/{uid}", ctx -> {
-            User me = SessionStore.currentUser(ctx);
-            if (me == null || !me.isAdmin()) { ctx.status(403).result("Forbidden"); return; }
             String targetUid = ctx.pathParam("uid");
             SessionStore.promoteToScholar(targetUid);
             ctx.result("OK");
         });
 
-
         app.start(7001);
     }
 
     // ---------------- Helpers ----------------
-
-    /** Always include "me" safely; never pass null into Map.of. */
-    private static void render(Context ctx, String template, Map<String, Object> model) {
-        Map<String, Object> m = (model == null)
-                ? new HashMap<>()
-                : new HashMap<>(model);
-        m.putIfAbsent("me", SessionStore.currentUser(ctx)); // may be null — that's fine in HashMap/JTE
-        ctx.render(template, m);
-    }
-
-    /** Tiny convenience for building small models. */
-    private static Map<String, Object> mapOf(Object... kv) {
-        HashMap<String, Object> m = new HashMap<>();
-        for (int i = 0; i + 1 < kv.length; i += 2) {
-            m.put(String.valueOf(kv[i]), kv[i + 1]);
-        }
-        return m;
-    }
 
     private static String param(Context ctx, String name) {
         String v = ctx.formParam(name);
@@ -381,9 +326,7 @@ public class Main {
     }
 
     private static Post findPostOr404(Context ctx) {
-        int id;
-        try { id = Integer.parseInt(ctx.pathParam("id")); }
-        catch (Exception e) { ctx.status(404).result("Not found"); throw new IllegalStateException("Post not found"); }
+        int id = Integer.parseInt(ctx.pathParam("id"));
         if (id < 0 || id >= POSTS.size()) {
             ctx.status(404).result("Not found");
             throw new IllegalStateException("Post not found");
@@ -391,13 +334,14 @@ public class Main {
         return POSTS.get(id);
     }
 
-    /** Stable, anonymous per-browser id for ownership + rate-limiting. Not a login. */
+    /** Stable, anonymous per-browser id used for ownership and rate-limiting. */
     private static String getOrCreateUid(Context ctx) {
         String uid = ctx.cookie("uid");
         if (uid == null || uid.isBlank()) {
             uid = UUID.randomUUID().toString();
-            // Keep it simple/portable (advanced flags caused compile issues on your setup)
-            ctx.cookie("uid", uid);
+
+            // Create cookie using new Javalin 6 API (no chaining)
+            ctx.cookie("uid", uid, 60 * 60 * 24 * 365); // name, value, max-age
         }
         return uid;
     }
@@ -413,19 +357,16 @@ public class Main {
                 .computeIfAbsent(uid, k -> new ConcurrentHashMap<>())
                 .put(postId, value);
     }
-    private static String sha256(byte[] data) {
-        try {
-            var digest = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] hashBytes = digest.digest(data);
 
-            // Convert bytes → hex string
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hashBytes) {
-                sb.append(String.format("%02x", b));
-            }
+    private static String sha256(byte[] bytes) {
+        try {
+            var md = java.security.MessageDigest.getInstance("SHA-256");
+            var d  = md.digest(bytes);
+            var sb = new StringBuilder();
+            for (byte b : d) sb.append(String.format("%02x", b));
             return sb.toString();
         } catch (Exception e) {
-            throw new RuntimeException("SHA-256 hashing failed", e);
+            return "";
         }
     }
 }
