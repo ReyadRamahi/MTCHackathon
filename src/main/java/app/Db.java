@@ -105,40 +105,6 @@ public class Db {
         }
     }
 
-    public static void deletePost(int id) throws SQLException {
-        try (var conn = get();
-             var ps = conn.prepareStatement("DELETE FROM posts WHERE id=?")) {
-            ps.setInt(1, id);
-            int n = ps.executeUpdate(); // n should be 1
-        }
-    }
-    public static void deletePostCascade(int postId) throws SQLException {
-        try (var conn = get()) {
-            conn.setAutoCommit(false);
-
-            // If you use SQLite, make sure FKs are on in your Db.init():
-            // try (var st = conn.createStatement()) { st.execute("PRAGMA foreign_keys = ON"); }
-
-            try (var ps1 = conn.prepareStatement("DELETE FROM comments WHERE post_id=?");
-                 var ps2 = conn.prepareStatement("DELETE FROM votes    WHERE post_id=?");
-                 var ps3 = conn.prepareStatement("DELETE FROM posts    WHERE id=?")) {
-
-                ps1.setInt(1, postId); ps1.executeUpdate();
-                ps2.setInt(1, postId); ps2.executeUpdate();
-                ps3.setInt(1, postId);
-                int n = ps3.executeUpdate();  // should be 1
-
-                conn.commit();
-                if (n != 1) throw new SQLException("No post row deleted for id=" + postId);
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        }
-    }
-
     public static boolean checkPassword(String email, String rawPassword) throws SQLException {
         try (var conn = get();
              var ps = conn.prepareStatement("SELECT password_hash FROM users WHERE email=?")) {
@@ -147,6 +113,47 @@ public class Db {
                 if (!rs.next()) return false;
                 return BCrypt.checkpw(rawPassword, rs.getString("password_hash"));
             }
+        }
+    }
+    public static int getPostScore(int postId) throws SQLException {
+        try (var conn = get();
+             var ps = conn.prepareStatement(
+                     "SELECT COALESCE(SUM(value),0) AS score FROM post_votes WHERE post_id=?")) {
+            ps.setInt(1, postId);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt("score") : 0;
+            }
+        }
+    }
+
+    public static void hidePostForLowScore(int postId) throws SQLException {
+        try (var conn = get();
+             var ps = conn.prepareStatement(
+                     "UPDATE posts SET is_hidden=TRUE, hidden_reason='low_score', hidden_at=CURRENT_TIMESTAMP " +
+                             "WHERE id=? AND is_hidden=FALSE")) {
+            ps.setInt(1, postId);
+            ps.executeUpdate();
+        }
+    }
+
+    // (Optional) hard-delete and remove any attached file
+    public static void deletePost(int postId) throws SQLException {
+        String filePath = null;
+        try (var conn = get();
+             var ps = conn.prepareStatement("SELECT file_path FROM posts WHERE id=?")) {
+            ps.setInt(1, postId);
+            try (var rs = ps.executeQuery()) {
+                if (rs.next()) filePath = rs.getString("file_path");
+            }
+        }
+        try (var conn = get();
+             var ps = conn.prepareStatement("DELETE FROM posts WHERE id=?")) {
+            ps.setInt(1, postId);
+            ps.executeUpdate();
+        }
+        if (filePath != null && !filePath.isBlank()) {
+            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(filePath)); }
+            catch (Exception e) { System.err.println("Failed to delete file: " + filePath); e.printStackTrace(); }
         }
     }
     //helpers for diploma verification
@@ -240,6 +247,26 @@ public class Db {
                         "file_path", rs.getString("file_path"),
                         "file_name", rs.getString("file_name")
                 );
+            }
+        }
+    }
+    // Db.java
+    public static String getUidByRequestId(int id) throws SQLException {
+        try (var conn = get();
+             var ps = conn.prepareStatement("SELECT uid FROM verification_requests WHERE id=?")) {
+            ps.setInt(1, id);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString("uid") : null;
+            }
+        }
+    }
+
+    public static String getFilePathByRequestId(int id) throws SQLException {
+        try (var conn = get();
+             var ps = conn.prepareStatement("SELECT file_path FROM verification_requests WHERE id=?")) {
+            ps.setInt(1, id);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString("file_path") : null;
             }
         }
     }

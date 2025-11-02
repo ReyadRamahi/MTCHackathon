@@ -158,6 +158,7 @@ public class Main {
         });
 
         // Upvote
+        // Upvote
         app.post("/q/{id}/upvote", ctx -> {
             Post p = findPostOr404(ctx);
             String uid = getOrCreateUid(ctx);
@@ -165,11 +166,12 @@ public class Main {
             if (before != +1) {
                 setUserVote(uid, p.getId(), +1);
                 p.applyVoteDelta(+1 - before);          // net delta
+                maybeDeleteOnThreshold(p);              // <-- new
             }
             ctx.redirect("/");
         });
 
-        // Downvote
+// Downvote
         app.post("/q/{id}/downvote", ctx -> {
             Post p = findPostOr404(ctx);
             String uid = getOrCreateUid(ctx);
@@ -177,6 +179,7 @@ public class Main {
             if (before != -1) {
                 setUserVote(uid, p.getId(), -1);
                 p.applyVoteDelta(-1 - before);          // net delta
+                maybeDeleteOnThreshold(p);              // <-- new
             }
             ctx.redirect("/");
         });
@@ -313,23 +316,44 @@ public class Main {
             }
         }, Role.ADMIN);
 
-        // Admin: approve
+        // ---- Admin: approve ----
         app.post("/admin/verify/approve/{id}", ctx -> {
-            int requestId = Integer.parseInt(ctx.pathParam("id"));
-            String note   = ctx.formParam("decisionNote");
-            if (note == null || note.isBlank()) note = "Approved by admin";
-            Db.approveRequest(requestId, note);
-            ctx.redirect("/admin/verify");
-        }, Role.ADMIN);
+            var me = SessionStore.currentUser(ctx);
+            if (me == null || me.getRole() != Role.ADMIN) { ctx.status(403).result("forbidden"); return; }
 
-// Admin: reject
-        app.post("/admin/verify/reject/{id}", ctx -> {
             int requestId = Integer.parseInt(ctx.pathParam("id"));
-            String note   = ctx.formParam("decisionNote");
-            if (note == null || note.isBlank()) note = "Rejected by admin";
-            Db.rejectRequest(requestId, note);
+            String applicantUid, filePath;
+            try {
+                applicantUid = Db.getUidByRequestId(requestId);
+                filePath     = Db.getFilePathByRequestId(requestId);
+                Db.approveRequest(requestId, "Approved by admin");
+            } catch (Exception e) { e.printStackTrace(); ctx.status(500).result("approve failed"); return; }
+
+            if (filePath != null && !filePath.isBlank()) {
+                try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(filePath)); } catch (Exception ignore) {}
+            }
+            if (applicantUid != null && !applicantUid.isBlank()) {
+                SessionStore.setRoleForUid(applicantUid, Role.SCHOLAR); // <- uses USERS map now
+            }
             ctx.redirect("/admin/verify");
-        }, Role.ADMIN);
+        });
+
+        app.post("/admin/verify/reject/{id}", ctx -> {
+            var me = SessionStore.currentUser(ctx);
+            if (me == null || me.getRole() != Role.ADMIN) { ctx.status(403).result("forbidden"); return; }
+
+            int requestId = Integer.parseInt(ctx.pathParam("id"));
+            String filePath;
+            try {
+                filePath = Db.getFilePathByRequestId(requestId);
+                Db.rejectRequest(requestId, "Rejected by admin");
+            } catch (Exception e) { e.printStackTrace(); ctx.status(500).result("reject failed"); return; }
+
+            if (filePath != null && !filePath.isBlank()) {
+                try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(filePath)); } catch (Exception ignore) {}
+            }
+            ctx.redirect("/admin/verify");
+        });
         // ---------- Auth: signup / login / logout ----------
 
         app.get("/signup", ctx ->
@@ -389,7 +413,6 @@ public class Main {
             SessionStore.promoteToScholar(targetUid);
             ctx.result("OK");
         });
-        
 
         app.start(7001);
     }
@@ -445,7 +468,6 @@ public class Main {
             return "";
         }
     }
-    /** Hide posts that hit -5 or worse; unhide if score rises above -5. */
     private static final int AUTO_DELETE_THRESHOLD = -5;
 
     private static void maybeDeleteOnThreshold(Post p) {

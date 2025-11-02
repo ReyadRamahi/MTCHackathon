@@ -52,4 +52,17 @@ public final class SessionStore {
         if (u != null) u.setRole(Role.SCHOLAR);
     }
 
+    // SessionStore.java
+    public static void setRoleForUid(String uid, Role role) {
+        if (uid == null || uid.isBlank() || role == null) return;
+        User u = USERS.get(uid);          // <- you already have this cache
+        if (u != null) {
+            u.setRole(role);              // update in-memory role for that uid
+        }
+        // If the applicant hasn't visited yet (no User in USERS),
+        // it's fine to do nothing here. When they next make a request
+        // and you load/create their User, their role can be derived
+        // from DB if you later persist it. For now in-memory is enough.
+    }
+
 }
